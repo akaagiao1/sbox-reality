@@ -1,17 +1,17 @@
 # sbox-reality
 
-一个用于 Debian / Ubuntu VPS 的 **sing-box AnyTLS + REALITY** 一键安装脚本。
+专业、轻量、可读的 **sing-box AnyTLS + REALITY** 一键安装脚本。
 
-脚本目标很简单：快速生成服务端 sing-box 配置，并额外输出客户端 `outbounds` 片段，方便合并到你已有的 sing-box 客户端配置中。
-
-> 本项目不是 sing-box 官方项目。协议与内核能力来自 sing-box，本仓库只提供自动化安装与配置生成脚本。
+本项目专为 Debian / Ubuntu VPS 编写，目标是用最少步骤完成服务端部署，并自动生成可直接合并到客户端配置中的 `outbounds` 片段。
 
 ---
 
 ## 一键安装
 
-默认握手域名：`www.apple.com`  
-默认监听端口：`443`
+默认配置：
+
+- REALITY 握手域名：`www.apple.com`
+- AnyTLS 监听端口：`443`
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install-anytls-reality.sh)
@@ -35,9 +35,9 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 
 ---
 
-## 保守安装方式
+## 安全执行方式
 
-如果你不想直接远程执行脚本，可以先下载再运行：
+如果你希望先查看脚本内容，再执行：
 
 ```bash
 curl -fsSL -o install-anytls-reality.sh https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install-anytls-reality.sh
@@ -45,7 +45,7 @@ chmod +x install-anytls-reality.sh
 bash install-anytls-reality.sh
 ```
 
-自定义参数同样支持：
+带参数执行：
 
 ```bash
 bash install-anytls-reality.sh -d www.microsoft.com -p 8443
@@ -55,19 +55,17 @@ bash install-anytls-reality.sh -d www.microsoft.com -p 8443
 
 ## 功能特性
 
-- 安装 / 更新 sing-box
+- 自动安装 / 更新 sing-box
 - 自动生成 REALITY 私钥和公钥
 - 自动生成 AnyTLS 密码
 - 自动生成 `short_id`
-- 默认 REALITY 握手域名：`www.apple.com`
-- 默认 AnyTLS 监听端口：`443`
-- 支持 `-d / --domain` 自定义握手域名
-- 支持 `-p / --port` 自定义监听端口
-- 自动写入服务端配置：`/etc/sing-box/config.json`
-- 自动生成客户端 `outbounds` 片段：`/root/client-outbounds-anytls-reality.json`
-- 自动生成安装信息：`/root/anytls-reality-info.txt`
+- 自动写入服务端配置
+- 自动生成客户端 `outbounds` 片段
+- 支持自定义 REALITY 握手域名
+- 支持自定义 AnyTLS 监听端口
 - 自动执行 `sing-box check`
 - 自动启用并重启 sing-box 服务
+- 配置简洁，便于二次修改
 
 ---
 
@@ -232,14 +230,15 @@ short_id
 
 ---
 
-## 项目说明
+## 项目定位
 
-本仓库脚本面向个人 VPS 快速部署场景，重点是简洁、可读、可改。
+`sbox-reality` 是一个面向个人 VPS 快速部署场景的 Bash 自动化脚本，重点是：
 
-- 不是 sing-box 官方脚本
-- 不内置订阅面板
-- 不生成 Clash / Mihomo 配置
-- 不保证所有第三方客户端兼容
+- 少步骤
+- 易阅读
+- 易修改
+- 服务端配置完整
+- 客户端片段干净
 
 ---
 
