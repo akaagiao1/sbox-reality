@@ -2,64 +2,53 @@
 
 一个用于 Debian / Ubuntu VPS 的 **sing-box AnyTLS + REALITY** 一键安装脚本。
 
-本仓库脚本是按实际部署需求整理的轻量版：服务端自动生成完整 sing-box 配置，客户端只输出 `outbounds` 片段，方便合并到已有 sing-box 客户端配置中。
+脚本目标很简单：快速生成服务端 sing-box 配置，并额外输出客户端 `outbounds` 片段，方便合并到你已有的 sing-box 客户端配置中。
 
-> 说明：本项目不是 sing-box 官方项目。协议与内核能力来自 sing-box，本仓库只提供自动化安装与配置生成脚本。
-
----
-
-## 脚本直链
-
-脚本文件：
-
-```text
-https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install-anytls-reality.sh
-```
+> 本项目不是 sing-box 官方项目。协议与内核能力来自 sing-box，本仓库只提供自动化安装与配置生成脚本。
 
 ---
 
-## 快速安装
+## 一键安装
 
-推荐先下载脚本，再执行：
+默认握手域名：`www.apple.com`  
+默认监听端口：`443`
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install-anytls-reality.sh
-chmod +x install-anytls-reality.sh
-bash install-anytls-reality.sh
-```
-
-默认配置：
-
-```text
-REALITY 握手域名：www.apple.com
-AnyTLS 监听端口：443
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install-anytls-reality.sh)
 ```
 
 ---
 
 ## 自定义域名和端口
 
-例如将握手域名改为 `www.microsoft.com`，监听端口改为 `8443`：
+例如将 REALITY 握手域名改为 `www.microsoft.com`，AnyTLS 监听端口改为 `8443`：
 
 ```bash
-bash install-anytls-reality.sh -d www.microsoft.com -p 8443
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install-anytls-reality.sh) -d www.microsoft.com -p 8443
 ```
 
-也可以使用长参数：
+长参数写法：
 
 ```bash
-bash install-anytls-reality.sh --domain www.apple.com --port 443
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install-anytls-reality.sh) --domain www.apple.com --port 443
 ```
 
 ---
 
-## 克隆仓库执行
+## 保守安装方式
+
+如果你不想直接远程执行脚本，可以先下载再运行：
 
 ```bash
-git clone https://github.com/akaagiao1/sbox-reality.git
-cd sbox-reality
+curl -fsSL -o install-anytls-reality.sh https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install-anytls-reality.sh
 chmod +x install-anytls-reality.sh
 bash install-anytls-reality.sh
+```
+
+自定义参数同样支持：
+
+```bash
+bash install-anytls-reality.sh -d www.microsoft.com -p 8443
 ```
 
 ---
@@ -71,7 +60,7 @@ bash install-anytls-reality.sh
 - 自动生成 AnyTLS 密码
 - 自动生成 `short_id`
 - 默认 REALITY 握手域名：`www.apple.com`
-- 默认监听端口：`443`
+- 默认 AnyTLS 监听端口：`443`
 - 支持 `-d / --domain` 自定义握手域名
 - 支持 `-p / --port` 自定义监听端口
 - 自动写入服务端配置：`/etc/sing-box/config.json`
@@ -102,9 +91,8 @@ bash install-anytls-reality.sh
 示例：
 
 ```bash
-bash install-anytls-reality.sh -d www.apple.com -p 443
-bash install-anytls-reality.sh -d www.microsoft.com -p 8443
-bash install-anytls-reality.sh --domain www.apple.com --port 443
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install-anytls-reality.sh) -d www.apple.com -p 443
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install-anytls-reality.sh) -d www.microsoft.com -p 8443
 ```
 
 ---
@@ -154,7 +142,7 @@ cat /root/client-outbounds-anytls-reality.json
 }
 ```
 
-如果你的客户端已有完整 sing-box 配置，不要重复粘贴第二个 `outbounds`。只需要把里面的 AnyTLS 节点合并进你原来的 `outbounds` 数组。
+如果你的客户端已经有完整 sing-box 配置，不要重复粘贴第二个 `outbounds`。只需要把里面的 AnyTLS 节点合并进你原来的 `outbounds` 数组。
 
 ---
 
