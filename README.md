@@ -2,7 +2,7 @@
 
 专业、轻量、可读的 **sing-box AnyTLS + REALITY** 一键安装脚本。
 
-本项目专为 Debian / Ubuntu VPS 编写，目标是用最少步骤完成服务端部署，并自动生成可直接合并到客户端配置中的 `outbounds` 片段。
+本项目专为 Debian / Ubuntu VPS 编写，默认自动选择一个当前未被占用的随机高端口，完成服务端部署，并生成可直接合并到客户端配置中的 `outbounds` 片段。
 
 ---
 
@@ -11,17 +11,29 @@
 默认配置：
 
 - REALITY 握手域名：`www.apple.com`
-- AnyTLS 监听端口：`443`
+- AnyTLS 监听端口：自动随机未占用高端口，默认范围 `20000-65535`
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install-anytls-reality.sh)
 ```
 
+安装完成后，终端会直接输出本次随机生成的端口、密码、公钥和客户端 `outbounds`。
+
 ---
 
-## 自定义域名和端口
+## 自定义域名
 
-例如将 REALITY 握手域名改为 `www.microsoft.com`，AnyTLS 监听端口改为 `8443`：
+只换 REALITY 握手域名，端口仍然自动随机：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install-anytls-reality.sh) -d www.microsoft.com
+```
+
+---
+
+## 手动指定端口
+
+例如将 REALITY 握手域名改为 `www.microsoft.com`，AnyTLS 监听端口固定为 `8443`：
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install-anytls-reality.sh) -d www.microsoft.com -p 8443
@@ -30,7 +42,25 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 长参数写法：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install-anytls-reality.sh) --domain www.apple.com --port 443
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install-anytls-reality.sh) --domain www.apple.com --port 8443
+```
+
+需要显式使用随机端口时：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install-anytls-reality.sh) --port auto
+```
+
+---
+
+## 自定义随机端口范围
+
+默认随机范围是 `20000-65535`。
+
+如果想限制在某个高端口区间，例如 `30000-50000`：
+
+```bash
+HIGH_PORT_MIN=30000 HIGH_PORT_MAX=50000 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install-anytls-reality.sh)
 ```
 
 ---
@@ -56,13 +86,15 @@ bash install-anytls-reality.sh -d www.microsoft.com -p 8443
 ## 功能特性
 
 - 自动安装 / 更新 sing-box
+- 默认随机选择当前未被占用的高端口
+- 支持手动指定 AnyTLS 监听端口
+- 支持自定义随机端口范围
 - 自动生成 REALITY 私钥和公钥
 - 自动生成 AnyTLS 密码
 - 自动生成 `short_id`
 - 自动写入服务端配置
 - 自动生成客户端 `outbounds` 片段
 - 支持自定义 REALITY 握手域名
-- 支持自定义 AnyTLS 监听端口
 - 自动执行 `sing-box check`
 - 自动启用并重启 sing-box 服务
 - 配置简洁，便于二次修改
@@ -74,7 +106,7 @@ bash install-anytls-reality.sh -d www.microsoft.com -p 8443
 - Debian / Ubuntu
 - root 权限
 - 系统使用 `apt`
-- VPS 防火墙或云厂商安全组已放行对应 TCP 端口
+- VPS 防火墙或云厂商安全组已放行脚本最终输出的 TCP 端口
 
 ---
 
@@ -83,14 +115,22 @@ bash install-anytls-reality.sh -d www.microsoft.com -p 8443
 | 参数 | 说明 | 默认值 |
 | --- | --- | --- |
 | `-d`, `--domain` | REALITY 握手域名 | `www.apple.com` |
-| `-p`, `--port` | AnyTLS 监听端口 | `443` |
+| `-p`, `--port` | AnyTLS 监听端口；可填具体端口或 `auto` | `auto` |
 | `-h`, `--help` | 查看帮助 | - |
+
+环境变量：
+
+| 变量 | 说明 | 默认值 |
+| --- | --- | --- |
+| `HIGH_PORT_MIN` | 随机端口最小值 | `20000` |
+| `HIGH_PORT_MAX` | 随机端口最大值 | `65535` |
 
 示例：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install-anytls-reality.sh) -d www.apple.com -p 443
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install-anytls-reality.sh) -d www.apple.com
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install-anytls-reality.sh) -d www.microsoft.com -p 8443
+HIGH_PORT_MIN=30000 HIGH_PORT_MAX=50000 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install-anytls-reality.sh)
 ```
 
 ---
@@ -120,7 +160,7 @@ cat /root/client-outbounds-anytls-reality.json
       "type": "anytls",
       "tag": "proxy",
       "server": "你的VPS_IP",
-      "server_port": 443,
+      "server_port": "脚本最终输出的端口",
       "password": "自动生成",
       "tls": {
         "enabled": true,
@@ -194,14 +234,21 @@ cat /root/anytls-reality-info.txt
 
 ---
 
-### 改端口后无法连接
+### 随机端口无法连接
 
-检查 VPS 防火墙、安全组、防火墙面板是否放行对应 TCP 端口。
+脚本只会检查 VPS 本机当前是否监听该端口，不会自动修改云厂商安全组。
+
+如果无法连接，优先检查：
+
+- VPS 系统防火墙
+- 云厂商安全组
+- 面板防火墙
+- 客户端是否使用了最新生成的端口
 
 例如：
 
 ```bash
-ufw allow 8443/tcp
+ufw allow 端口/tcp
 ```
 
 ---
@@ -211,6 +258,7 @@ ufw allow 8443/tcp
 每次重新运行脚本都会重新生成：
 
 ```text
+port
 password
 private_key / public_key
 short_id
@@ -239,6 +287,7 @@ short_id
 - 易修改
 - 服务端配置完整
 - 客户端片段干净
+- 默认避开常见 80 / 443 端口冲突
 
 ---
 
