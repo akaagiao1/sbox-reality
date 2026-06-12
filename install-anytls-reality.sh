@@ -2,7 +2,9 @@
 set -euo pipefail
 
 DOMAIN="${DOMAIN:-www.apple.com}"
-PORT="${PORT:-443}"
+PORT="${PORT:-auto}"
+HIGH_PORT_MIN="${HIGH_PORT_MIN:-20000}"
+HIGH_PORT_MAX="${HIGH_PORT_MAX:-65535}"
 SERVER_CONF="/etc/sing-box/config.json"
 CLIENT_OUT="/root/client-outbounds-anytls-reality.json"
 INFO="/root/anytls-reality-info.txt"
@@ -11,12 +13,18 @@ usage() {
   cat << USAGE
 Usage:
   bash $0
-  bash $0 -d www.apple.com -p 443
-  bash $0 --domain www.microsoft.com --port 8443
+  bash $0 -d www.apple.com
+  bash $0 -d www.microsoft.com -p 8443
+  bash $0 --domain www.apple.com --port auto
 
 Defaults:
   domain = www.apple.com
-  port   = 443
+  port   = auto, random free high port between ${HIGH_PORT_MIN}-${HIGH_PORT_MAX}
+
+Options:
+  -d, --domain   REALITY handshake domain
+  -p, --port     AnyTLS listen port. Use auto for random free high port
+  -h, --help     Show help
 USAGE
 }
 
@@ -51,14 +59,9 @@ if [[ -z "$DOMAIN" ]]; then
   exit 1
 fi
 
-if [[ ! "$PORT" =~ ^[0-9]+$ ]] || (( PORT < 1 || PORT > 65535 )); then
-  echo "Error: invalid port: $PORT"
-  exit 1
-fi
-
 if [[ $EUID -ne 0 ]]; then
   echo "Error: please run as root"
-  echo "Example: sudo bash $0 -d www.apple.com -p 443"
+  echo "Example: sudo bash $0 -d www.apple.com"
   exit 1
 fi
 
@@ -67,13 +70,73 @@ if ! command -v apt >/dev/null 2>&1; then
   exit 1
 fi
 
+validate_port() {
+  local port="$1"
+  [[ "$port" =~ ^[0-9]+$ ]] && (( port >= 1 && port <= 65535 ))
+}
+
+is_port_in_use() {
+  local port="$1"
+  ss -H -lntp 2>/dev/null | awk -v p="$port" '$4 ~ ":" p "$" {print}' | grep -q .
+}
+
+is_port_in_use_by_other() {
+  local port="$1"
+  ss -H -lntp 2>/dev/null | awk -v p="$port" '$4 ~ ":" p "$" {print}' | grep -v "sing-box" | grep -q .
+}
+
+random_number() {
+  od -An -N4 -tu4 /dev/urandom | tr -d ' '
+}
+
+pick_random_free_high_port() {
+  local candidate
+  local range=$(( HIGH_PORT_MAX - HIGH_PORT_MIN + 1 ))
+
+  if (( HIGH_PORT_MIN < 1024 || HIGH_PORT_MIN > HIGH_PORT_MAX || HIGH_PORT_MAX > 65535 )); then
+    echo "Error: invalid high port range: ${HIGH_PORT_MIN}-${HIGH_PORT_MAX}" >&2
+    exit 1
+  fi
+
+  for _ in $(seq 1 100); do
+    candidate=$(( HIGH_PORT_MIN + $(random_number) % range ))
+    if ! is_port_in_use "$candidate"; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+
+  echo "Error: failed to find a free high port in ${HIGH_PORT_MIN}-${HIGH_PORT_MAX}" >&2
+  exit 1
+}
+
 echo "AnyTLS + REALITY installer"
-echo "  domain: $DOMAIN"
-echo "  port:   $PORT"
-echo
+echo "  installing dependencies..."
 
 apt update
-apt install -y curl openssl ca-certificates
+apt install -y curl openssl ca-certificates iproute2 coreutils
+
+if [[ -z "$PORT" || "$PORT" == "auto" || "$PORT" == "random" ]]; then
+  PORT="$(pick_random_free_high_port)"
+  PORT_MODE="random"
+else
+  if ! validate_port "$PORT"; then
+    echo "Error: invalid port: $PORT"
+    exit 1
+  fi
+
+  if is_port_in_use_by_other "$PORT"; then
+    echo "Error: port $PORT is already used by another process"
+    ss -H -lntp 2>/dev/null | awk -v p="$PORT" '$4 ~ ":" p "$" {print}' || true
+    exit 1
+  fi
+
+  PORT_MODE="manual"
+fi
+
+echo "  domain: $DOMAIN"
+echo "  port:   $PORT ($PORT_MODE)"
+echo
 
 curl -fsSL https://sing-box.app/install.sh | sh
 
@@ -177,6 +240,7 @@ AnyTLS + REALITY installed
 Server:
   config: $SERVER_CONF
   listen_port: $PORT
+  port_mode: $PORT_MODE
   handshake_domain: $DOMAIN
 
 Client outbounds:
