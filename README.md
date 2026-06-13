@@ -1,12 +1,51 @@
 # sbox-reality
 
-专业、轻量、可读的 **sing-box AnyTLS + REALITY** 一键安装脚本。
+专业、轻量、可读的 **sing-box** 一键安装脚本。
+
+支持：
+
+- **AnyTLS + REALITY**
+- **Hysteria2 + Surge 端口跳跃**
+- **同时安装两个入站到同一个 sing-box 配置**
 
 本项目专为 Debian / Ubuntu VPS 编写，默认自动选择一个当前未被占用的随机高端口，完成服务端部署，并生成可直接合并到客户端配置中的 `outbounds` 片段。
 
 ---
 
-## 一键安装
+## 统一一键安装
+
+推荐使用统一脚本：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh)
+```
+
+不带参数运行时会出现菜单：
+
+```text
+1) AnyTLS + REALITY
+2) Hysteria2 + Surge port hopping
+3) Install both
+```
+
+也可以直接指定安装模式：
+
+```bash
+# 只安装 AnyTLS + REALITY
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode 1
+
+# 只安装 Hysteria2 + Surge 端口跳跃
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode 2
+
+# 同时安装两个入站
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode both
+```
+
+同时安装时，脚本会生成同一个 `/etc/sing-box/config.json`，其中包含 `anytls-in` 和 `hy2-in` 两个入站；不会用第二个协议覆盖第一个协议。
+
+---
+
+## AnyTLS + REALITY
 
 默认配置：
 
@@ -14,7 +53,7 @@
 - AnyTLS 监听端口：自动随机未占用高端口，默认范围 `20000-65535`
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install-anytls-reality.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode 1
 ```
 
 安装完成后，终端会直接输出本次随机生成的端口、密码、公钥和客户端 `outbounds`。
@@ -26,7 +65,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 只换 REALITY 握手域名，端口仍然自动随机：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install-anytls-reality.sh) -d www.microsoft.com
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode 1 -d www.microsoft.com
 ```
 
 ---
@@ -36,19 +75,19 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 例如将 REALITY 握手域名改为 `www.microsoft.com`，AnyTLS 监听端口固定为 `8443`：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install-anytls-reality.sh) -d www.microsoft.com -p 8443
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode 1 -d www.microsoft.com -p 8443
 ```
 
 长参数写法：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install-anytls-reality.sh) --domain www.apple.com --port 8443
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode 1 --domain www.apple.com --port 8443
 ```
 
 需要显式使用随机端口时：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install-anytls-reality.sh) --port auto
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode 1 --port auto
 ```
 
 ---
@@ -60,8 +99,54 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 如果想限制在某个高端口区间，例如 `30000-50000`：
 
 ```bash
-HIGH_PORT_MIN=30000 HIGH_PORT_MAX=50000 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install-anytls-reality.sh)
+HIGH_PORT_MIN=30000 HIGH_PORT_MAX=50000 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode 1
 ```
+
+---
+
+## Hysteria2 + Surge 端口跳跃
+
+默认配置：
+
+- TLS SNI：`www.bing.com`
+- Hysteria2 公开 UDP 跳跃端口：`20000-50000`
+- sing-box 实际监听端口：默认使用跳跃范围里的第一个端口
+- Surge 端口跳跃间隔：`30` 秒
+- 证书：自动生成自签证书，Surge 片段默认带 `skip-cert-verify=true`
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode 2
+```
+
+自定义 SNI、端口范围和跳跃间隔：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode 2 --sni example.com --ports "20000-50000;7044;8000-9000" --interval 30
+```
+
+如果你希望 sing-box 只监听一个固定后端端口，并把公开跳跃端口全部重定向过去：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode 2 --port 8443 --ports 20000-50000
+```
+
+开启 Hysteria2 Salamander 混淆：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode 2 --ports 20000-50000 --obfs
+```
+
+安装完成后会输出 Surge 片段，例如：
+
+```ini
+[Proxy]
+HY2 = hysteria2, 你的VPS_IP, 20000, password=自动生成, skip-cert-verify=true, sni=www.bing.com, port-hopping="20000-50000", port-hopping-interval=30
+
+[Proxy Group]
+Proxy = select, HY2, DIRECT
+```
+
+脚本会为 sing-box 创建 Hysteria2 入站，并通过 nftables 或 iptables 给 UDP 跳跃端口做本机重定向。VPS 防火墙或云厂商安全组需要放行脚本输出的 UDP 跳跃端口范围；如果本机防火墙按重定向后的端口过滤，也要放行 sing-box 实际监听端口。
 
 ---
 
@@ -70,15 +155,22 @@ HIGH_PORT_MIN=30000 HIGH_PORT_MAX=50000 bash <(curl -fsSL https://raw.githubuser
 如果你希望先查看脚本内容，再执行：
 
 ```bash
-curl -fsSL -o install-anytls-reality.sh https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install-anytls-reality.sh
-chmod +x install-anytls-reality.sh
-bash install-anytls-reality.sh
+curl -fsSL -o install.sh https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh
+chmod +x install.sh
+bash install.sh
 ```
 
 带参数执行：
 
 ```bash
-bash install-anytls-reality.sh -d www.microsoft.com -p 8443
+bash install.sh --mode both -d www.microsoft.com --anytls-port 8443 --hy2-port 20000 --ports 20000-50000
+```
+
+旧的单协议脚本仍然保留，方便兼容已有命令：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install-anytls-reality.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install-hysteria2-surge.sh)
 ```
 
 ---
@@ -86,6 +178,7 @@ bash install-anytls-reality.sh -d www.microsoft.com -p 8443
 ## 功能特性
 
 - 自动安装 / 更新 sing-box
+- 菜单选择安装 AnyTLS + REALITY、Hysteria2 + Surge，或同时安装
 - 默认随机选择当前未被占用的高端口
 - 支持手动指定 AnyTLS 监听端口
 - 支持自定义随机端口范围
@@ -107,6 +200,7 @@ bash install-anytls-reality.sh -d www.microsoft.com -p 8443
 - root 权限
 - 系统使用 `apt`
 - VPS 防火墙或云厂商安全组已放行脚本最终输出的 TCP 端口
+- 使用 Hysteria2 端口跳跃时，需要放行脚本最终输出的 UDP 跳跃端口范围
 
 ---
 
@@ -114,8 +208,11 @@ bash install-anytls-reality.sh -d www.microsoft.com -p 8443
 
 | 参数 | 说明 | 默认值 |
 | --- | --- | --- |
+| `-m`, `--mode` | 安装模式：`1`/`anytls`、`2`/`hy2`、`3`/`both` | 交互菜单 |
 | `-d`, `--domain` | REALITY 握手域名 | `www.apple.com` |
-| `-p`, `--port` | AnyTLS 监听端口；可填具体端口或 `auto` | `auto` |
+| `-p`, `--port` | 当前模式的监听端口；`--mode 1` 时对应 AnyTLS，`--mode 2` 时对应 Hysteria2 | `auto` |
+| `--anytls-port` | AnyTLS TCP 监听端口 | `auto` |
+| `--hy2-port` | Hysteria2 UDP 实际监听端口；同时安装时推荐使用 | `auto` |
 | `-h`, `--help` | 查看帮助 | - |
 
 环境变量：
@@ -124,14 +221,34 @@ bash install-anytls-reality.sh -d www.microsoft.com -p 8443
 | --- | --- | --- |
 | `HIGH_PORT_MIN` | 随机端口最小值 | `20000` |
 | `HIGH_PORT_MAX` | 随机端口最大值 | `65535` |
+| `INSTALL_MODE` | 安装模式 | 交互菜单 |
+| `PORT` | 兼容旧脚本的监听端口；会按当前模式分配给对应协议 | 空 |
+| `ANYTLS_PORT` | AnyTLS TCP 监听端口 | `auto` |
+| `HY2_PORT` | Hysteria2 UDP 实际监听端口 | `auto` |
 
 示例：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install-anytls-reality.sh) -d www.apple.com
-bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install-anytls-reality.sh) -d www.microsoft.com -p 8443
-HIGH_PORT_MIN=30000 HIGH_PORT_MAX=50000 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install-anytls-reality.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode 1 -d www.apple.com
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode 1 -d www.microsoft.com -p 8443
+HIGH_PORT_MIN=30000 HIGH_PORT_MAX=50000 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode 1
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode both --anytls-port 8443 --hy2-port 20000 --ports 20000-50000
 ```
+
+Hysteria2 + Surge 参数：
+
+| 参数 | 说明 | 默认值 |
+| --- | --- | --- |
+| `-s`, `--sni` | TLS SNI 和自签证书 CN | `www.bing.com` |
+| `-p`, `--port` | sing-box Hysteria2 实际监听端口；可填具体端口或 `auto` | `auto` |
+| `-P`, `--ports` | Surge `port-hopping` 端口或端口范围，多个值用 `;` 或 `,` 分隔 | `20000-50000` |
+| `-i`, `--interval` | 端口跳跃间隔秒数，最小 `5` | `30` |
+| `--up` | 服务端上传带宽 Mbps，可选 | 不限制 |
+| `--down` | 服务端下载带宽 Mbps，可选 | 不限制 |
+| `--obfs` | 开启 Salamander 混淆 | 关闭 |
+| `--obfs-password` | 指定 Salamander 混淆密码 | 自动生成 |
+| `--cert`, `--key` | 使用已有 TLS 证书和私钥 | 自动生成自签证书 |
+| `--name` | Surge 代理名称 | `HY2` |
 
 ---
 
@@ -141,14 +258,32 @@ HIGH_PORT_MIN=30000 HIGH_PORT_MAX=50000 bash <(curl -fsSL https://raw.githubuser
 
 ```text
 服务端配置：/etc/sing-box/config.json
+统一安装信息：/root/sbox-reality-info.txt
 客户端 outbounds：/root/client-outbounds-anytls-reality.json
 安装信息：/root/anytls-reality-info.txt
+```
+
+Hysteria2 + Surge 脚本会生成：
+
+```text
+服务端配置：/etc/sing-box/config.json
+sing-box 客户端 outbounds：/root/client-outbounds-hysteria2.json
+Surge 配置片段：/root/surge-hysteria2.conf
+安装信息：/root/hysteria2-surge-info.txt
+端口跳跃 helper：/usr/local/bin/sing-box-hy2-port-hopping
+端口跳跃 systemd drop-in：/etc/systemd/system/sing-box.service.d/10-hy2-port-hopping.conf
 ```
 
 查看客户端 `outbounds`：
 
 ```bash
 cat /root/client-outbounds-anytls-reality.json
+```
+
+查看 Surge 片段：
+
+```bash
+cat /root/surge-hysteria2.conf
 ```
 
 客户端输出只包含：
@@ -213,7 +348,7 @@ sing-box check -c /etc/sing-box/config.json
 查看生成的信息：
 
 ```bash
-cat /root/anytls-reality-info.txt
+cat /root/sbox-reality-info.txt
 ```
 
 ---
@@ -275,6 +410,14 @@ short_id
 ### Surge 能不能直接用？
 
 这个脚本生成的是 sing-box AnyTLS + REALITY 配置。客户端需要支持 AnyTLS + REALITY。建议优先使用 sing-box 客户端或基于新版 sing-box core 的客户端测试。
+
+如果要给 Surge 使用，请运行统一脚本的 Hysteria2 模式：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode 2
+```
+
+它会部署 sing-box Hysteria2，并生成 Surge 的 Hysteria2 `port-hopping` 配置片段。
 
 ---
 
