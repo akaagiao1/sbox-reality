@@ -136,7 +136,13 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode 2 --ports 20000-50000 --obfs
 ```
 
-安装完成后会输出 Surge 片段，例如：
+安装完成后会输出 Hysteria2 URL、Surge 片段和 sing-box 客户端 `outbounds`。Hysteria2 URL 可直接复制到支持 `hysteria2://` 分享链接的客户端，例如：
+
+```text
+hysteria2://auto-generated-password@1.2.3.4:20000-50000/?insecure=1&sni=www.bing.com#HY2
+```
+
+Surge 片段示例：
 
 ```ini
 [Proxy]
@@ -268,6 +274,7 @@ Hysteria2 + Surge 脚本会生成：
 ```text
 服务端配置：/etc/sing-box/config.json
 sing-box 客户端 outbounds：/root/client-outbounds-hysteria2.json
+Hysteria2 URL：/root/hysteria2-url.txt
 Surge 配置片段：/root/surge-hysteria2.conf
 安装信息：/root/hysteria2-surge-info.txt
 端口跳跃 helper：/usr/local/bin/sing-box-hy2-port-hopping
@@ -284,6 +291,12 @@ cat /root/client-outbounds-anytls-reality.json
 
 ```bash
 cat /root/surge-hysteria2.conf
+```
+
+查看 Hysteria2 URL：
+
+```bash
+cat /root/hysteria2-url.txt
 ```
 
 客户端输出只包含：

@@ -23,6 +23,7 @@ SERVER_CONF="/etc/sing-box/config.json"
 ANYTLS_CLIENT_OUT="/root/client-outbounds-anytls-reality.json"
 HY2_CLIENT_OUT="/root/client-outbounds-hysteria2.json"
 SURGE_CONF="/root/surge-hysteria2.conf"
+HY2_URL_FILE="/root/hysteria2-url.txt"
 ANYTLS_INFO="/root/anytls-reality-info.txt"
 HY2_INFO="/root/hysteria2-surge-info.txt"
 COMBINED_INFO="/root/sbox-reality-info.txt"
@@ -49,6 +50,7 @@ ANYTLS_PUBLIC_KEY=""
 ANYTLS_PASSWORD=""
 ANYTLS_SHORT_ID=""
 HY2_PASSWORD=""
+HY2_SHARE_URL=""
 
 usage() {
   cat << USAGE
@@ -81,7 +83,7 @@ Hysteria2 + Surge options:
       --name          Surge proxy name, default: HY2
 
 Shared:
-  -f, --mode          Install mode: 1, 2, 3, anytls, hy2, both
+  -m, --mode          Install mode: 1, 2, 3, anytls, hy2, both
   -p, --port          Port for mode 1 or mode 2. Use --anytls-port and --hy2-port for both mode
   -h, --help          Show help
 
@@ -386,6 +388,40 @@ surge_extra_params() {
   fi
 
   printf '%s' "$extra"
+}
+
+url_encode() {
+  local LC_ALL=C
+  local value="$1"
+  local encoded="" c hex i
+
+  for (( i=0; i<${#value}; i++ )); do
+    c="${value:i:1}"
+    case "$c" in
+      [a-zA-Z0-9.~_-])
+        encoded+="$c"
+        ;;
+      *)
+        printf -v hex '%%%02X' "'$c"
+        encoded+="$hex"
+        ;;
+    esac
+  done
+
+  printf '%s' "$encoded"
+}
+
+build_hy2_share_url() {
+  local uri_ports query
+
+  uri_ports="${NORMALIZED_HOP_PORTS//;/,}"
+  query="insecure=1&sni=$(url_encode "$HY2_SNI")"
+
+  if [[ "$OBFS" == "on" ]]; then
+    query="${query}&obfs=salamander&obfs-password=$(url_encode "$OBFS_PASSWORD")"
+  fi
+
+  HY2_SHARE_URL="hysteria2://$(url_encode "$HY2_PASSWORD")@${SERVER_IP}:${uri_ports}/?${query}#$(url_encode "$PROXY_NAME")"
 }
 
 prepare_certificate() {
@@ -777,6 +813,8 @@ JSON
 }
 
 write_hy2_clients() {
+  build_hy2_share_url
+
   cat > "$HY2_CLIENT_OUT" << JSON
 {
   "outbounds": [
@@ -804,6 +842,8 @@ ${PROXY_NAME} = hysteria2, ${SERVER_IP}, ${HY2_PORT}, password=${HY2_PASSWORD}, 
 [Proxy Group]
 Proxy = select, ${PROXY_NAME}, DIRECT
 SURGE
+
+  printf '%s\n' "$HY2_SHARE_URL" > "$HY2_URL_FILE"
 }
 
 write_info_files() {
@@ -863,6 +903,10 @@ Port hopping:
 Client files:
   sing-box outbounds: $HY2_CLIENT_OUT
   surge snippet: $SURGE_CONF
+  hysteria2 url: $HY2_URL_FILE
+
+Client URL:
+  $HY2_SHARE_URL
 
 Client parameters:
   server: $SERVER_IP
@@ -919,6 +963,9 @@ print_summary() {
     echo
     echo "Surge snippet:"
     cat "$SURGE_CONF"
+    echo
+    echo "Hysteria2 URL:"
+    cat "$HY2_URL_FILE"
     echo
     echo "Hysteria2 sing-box client outbounds:"
     cat "$HY2_CLIENT_OUT"
