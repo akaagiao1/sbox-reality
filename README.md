@@ -28,6 +28,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 2) Hysteria2 + Surge port hopping
 3) Install both
 4) Uninstall
+5) Restore latest backup
 ```
 
 也可以直接指定安装模式：
@@ -68,7 +69,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode both --config keep
 
 # 卸载后恢复最近一次有效备份
-bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode both --config restore
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --restore
 
 # 备份旧配置后生成全新配置
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode both --config new
@@ -275,7 +276,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 
 | 参数 | 说明 | 默认值 |
 | --- | --- | --- |
-| `-m`, `--mode` | 操作模式：`1`/`anytls`、`2`/`hy2`、`3`/`both`、`4`/`uninstall` | 交互菜单 |
+| `-m`, `--mode` | 操作模式：`1`/`anytls`、`2`/`hy2`、`3`/`both`、`4`/`uninstall`、`5`/`restore` | 交互菜单 |
+| `--restore` | 直接恢复最近一次有效备份 | 关闭 |
 | `--config` | 选择 `keep` 沿用当前配置、`restore` 恢复最近备份或 `new` 生成新配置 | 交互询问 |
 | `--uninstall` | 卸载范围：`anytls`、`hy2` 或 `all` | 卸载子菜单 |
 | `--purge` | 卸载全部配置时同时删除 sing-box 软件包 | 关闭 |

@@ -67,6 +67,7 @@ Usage:
   bash $0 --mode 1
   bash $0 --mode 2
   bash $0 --mode both
+  bash $0 --restore
   bash $0 --uninstall anytls|hy2|all
 
 Install modes:
@@ -74,6 +75,7 @@ Install modes:
   2, hy2        Install Hysteria2 + Surge port hopping
   3, both       Install both in the same sing-box config
   4, uninstall  Uninstall one or both configurations
+  5, restore    Restore the latest configuration backup
 
 Reinstall options (shown when an existing config is found):
       --config keep    Keep the existing server/client config and only update sing-box
@@ -103,7 +105,7 @@ Hysteria2 + Surge options:
       --name          Surge proxy name, default: HY2
 
 Shared:
-  -m, --mode          Mode: 1, 2, 3, 4, anytls, hy2, both, uninstall
+  -m, --mode          Mode: 1-5, anytls, hy2, both, uninstall, restore
   -p, --port          Port for mode 1 or mode 2. Use --anytls-port and --hy2-port for both mode
   -h, --help          Show help
 
@@ -136,6 +138,15 @@ while [[ $# -gt 0 ]]; do
       ;;
     4|uninstall|remove)
       INSTALL_MODE="4"
+      shift
+      ;;
+    5|restore|backup)
+      INSTALL_MODE="5"
+      shift
+      ;;
+    --restore)
+      ACTION="restore"
+      CONFIG_POLICY="restore"
       shift
       ;;
     --uninstall)
@@ -237,7 +248,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 choose_mode() {
-  if [[ "$ACTION" == "uninstall" || -n "$INSTALL_MODE" ]]; then
+  if [[ "$ACTION" != "install" || -n "$INSTALL_MODE" ]]; then
     return 0
   fi
 
@@ -247,8 +258,9 @@ choose_mode() {
     echo "  2) Hysteria2 + Surge port hopping"
     echo "  3) Install both"
     echo "  4) Uninstall"
+    echo "  5) Restore latest backup"
     echo
-    read -rp "Select [1-4]: " INSTALL_MODE
+    read -rp "Select [1-5]: " INSTALL_MODE
   else
     echo "Error: install mode is required in non-interactive mode"
     echo "Example: bash $0 --mode both"
@@ -257,7 +269,7 @@ choose_mode() {
 }
 
 normalize_mode() {
-  if [[ "$ACTION" == "uninstall" ]]; then
+  if [[ "$ACTION" != "install" ]]; then
     return 0
   fi
 
@@ -274,6 +286,10 @@ normalize_mode() {
       ;;
     4|uninstall|remove)
       ACTION="uninstall"
+      ;;
+    5|restore|backup)
+      ACTION="restore"
+      CONFIG_POLICY="restore"
       ;;
     *)
       echo "Error: invalid install mode: $INSTALL_MODE"
@@ -1491,6 +1507,12 @@ main() {
 
   if [[ "$ACTION" == "uninstall" ]]; then
     uninstall_selected
+    return 0
+  fi
+
+  if [[ "$ACTION" == "restore" ]]; then
+    choose_config_policy
+    restore_latest_backup
     return 0
   fi
 
