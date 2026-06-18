@@ -867,6 +867,34 @@ restore_file_from_backup() {
   cp -p "$source" "$destination"
 }
 
+validate_backup_tls_files() {
+  local backup_dir="$1"
+  local backup_config="$2"
+  local required_path backup_file
+
+  while IFS= read -r required_path; do
+    [[ -n "$required_path" ]] || continue
+    backup_file="${backup_dir}/$(basename "$required_path")"
+
+    if [[ "$required_path" == "$DEFAULT_CERT_PATH" || "$required_path" == "$DEFAULT_KEY_PATH" ]]; then
+      if [[ ! -f "$backup_file" ]]; then
+        echo "Error: backup is incomplete; missing $(basename "$required_path")"
+        exit 1
+      fi
+    elif [[ ! -f "$required_path" ]]; then
+      echo "Error: custom TLS file required by the backup does not exist: $required_path"
+      exit 1
+    fi
+  done < <(
+    jq -r '
+      .inbounds[]?
+      | .tls?
+      | [.certificate_path?, .key_path?][]
+      | select(type == "string" and length > 0)
+    ' "$backup_config"
+  )
+}
+
 restore_latest_backup() {
   local backup_config
   local -a destinations=(
@@ -899,7 +927,12 @@ restore_latest_backup() {
   echo "Restoring configuration from: $LATEST_BACKUP_DIR"
   echo "The selected install mode and new protocol options will not be applied."
   install_dependencies
-  sing-box check -c "$backup_config"
+
+  if ! jq -e . "$backup_config" >/dev/null; then
+    echo "Error: backup config is not valid JSON: $backup_config"
+    exit 1
+  fi
+  validate_backup_tls_files "$LATEST_BACKUP_DIR" "$backup_config"
 
   systemctl stop sing-box >/dev/null 2>&1 || true
   disable_hy2_port_hopping
@@ -913,6 +946,12 @@ restore_latest_backup() {
 
   if [[ -f "$PORT_HELPER" ]]; then
     chmod +x "$PORT_HELPER"
+  fi
+
+  if ! sing-box check -c "$SERVER_CONF"; then
+    echo "Error: restored files are in place, but sing-box validation failed"
+    echo "The service was left stopped. Backup: $LATEST_BACKUP_DIR"
+    exit 1
   fi
 
   systemctl daemon-reload
