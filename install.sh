@@ -700,7 +700,7 @@ disable_hy2_port_hopping() {
 
 backup_existing_files() {
   local reason="$1"
-  local backup_dir source
+  local backup_dir source copied=0
   local -a sources=(
     "$SERVER_CONF"
     "$ANYTLS_CLIENT_OUT"
@@ -724,11 +724,31 @@ backup_existing_files() {
   for source in "${sources[@]}"; do
     if [[ -f "$source" ]]; then
       cp -p "$source" "$backup_dir/$(basename "$source")"
+      copied=$(( copied + 1 ))
     fi
   done
 
+  if (( copied == 0 )); then
+    rmdir "$backup_dir" 2>/dev/null || true
+    LAST_BACKUP_DIR=""
+    echo "No existing configuration files were found; no empty backup was created."
+    return 0
+  fi
+
   LAST_BACKUP_DIR="$backup_dir"
   echo "Previous configuration backed up to: $backup_dir"
+}
+
+prune_backups_except() {
+  local keep_dir="$1"
+  local candidate
+
+  [[ -n "$keep_dir" && -d "$keep_dir" && -d "$BACKUP_ROOT" ]] || return 0
+
+  for candidate in "$BACKUP_ROOT"/*; do
+    [[ -d "$candidate" && "$candidate" != "$keep_dir" ]] || continue
+    rm -rf -- "$candidate"
+  done
 }
 
 find_latest_backup() {
@@ -1035,6 +1055,7 @@ uninstall_selected() {
   local matched=0
   local remaining=0
   local temp_config=""
+  local backup_status="not created"
 
   case "$UNINSTALL_SCOPE" in
     anytls)
@@ -1050,7 +1071,6 @@ uninstall_selected() {
   esac
 
   confirm_uninstall
-  backup_existing_files "uninstall-${UNINSTALL_SCOPE}"
 
   if [[ -s "$SERVER_CONF" ]]; then
     if ! command -v jq >/dev/null 2>&1; then
@@ -1062,6 +1082,12 @@ uninstall_selected() {
     if ! jq -e . "$SERVER_CONF" >/dev/null; then
       echo "Error: $SERVER_CONF is not valid JSON; no server configuration was changed"
       exit 1
+    fi
+
+    backup_existing_files "uninstall-${UNINSTALL_SCOPE}"
+    if [[ -n "$LAST_BACKUP_DIR" ]]; then
+      prune_backups_except "$LAST_BACKUP_DIR"
+      backup_status="$LAST_BACKUP_DIR"
     fi
 
     matched="$(jq --argjson remove_anytls "$remove_anytls" --argjson remove_hy2 "$remove_hy2" '
@@ -1095,6 +1121,11 @@ uninstall_selected() {
       fi
       rm -f "$temp_config"
     fi
+  else
+    find_latest_backup
+    if [[ -n "$LATEST_BACKUP_DIR" ]]; then
+      backup_status="$LATEST_BACKUP_DIR (existing backup retained)"
+    fi
   fi
 
   if [[ "$remove_anytls" == true ]]; then
@@ -1116,7 +1147,7 @@ uninstall_selected() {
     if [[ -s "$SERVER_CONF" ]] && command -v jq >/dev/null 2>&1 \
       && (( $(jq '(.inbounds // []) | length' "$SERVER_CONF") > 0 )); then
       echo "Error: other sing-box inbounds remain, so the package was not removed"
-      echo "Configuration backup: $LAST_BACKUP_DIR"
+      echo "Configuration backup: $backup_status"
       exit 1
     fi
     systemctl disable --now sing-box >/dev/null 2>&1 || true
@@ -1127,7 +1158,7 @@ uninstall_selected() {
   echo "Uninstall complete."
   echo "  scope: $UNINSTALL_SCOPE"
   echo "  removed_matching_inbounds: $matched"
-  echo "  backup: $LAST_BACKUP_DIR"
+  echo "  backup: $backup_status"
   if (( ! PURGE_SING_BOX )); then
     echo "  sing-box package: kept"
   fi

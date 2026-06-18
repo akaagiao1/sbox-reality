@@ -101,7 +101,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --uninstall all --purge
 ```
 
-卸载前会要求确认，并把现有配置备份到 `/root/sbox-reality-backups/`。非交互执行时可以增加 `--yes`。只卸载一个协议时，脚本只删除对应的 `anytls-in` 或 `hy2-in`，另一个协议会继续运行；卸载 HY2 还会清理端口跳跃规则和 systemd 配置。
+卸载前会要求确认，并把现有配置备份到 `/root/sbox-reality-backups/`。卸载备份采用单份轮换，只保留最新的一份；如果服务器已经没有配置，则不会创建空备份，也不会删除已有的有效备份。非交互执行时可以增加 `--yes`。只卸载一个协议时，脚本只删除对应的 `anytls-in` 或 `hy2-in`，另一个协议会继续运行；卸载 HY2 还会清理端口跳跃规则和 systemd 配置。
 
 ---
 
