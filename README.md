@@ -49,22 +49,26 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 
 ## 重新安装与保留配置
 
-服务器上已经存在 `/etc/sing-box/config.json` 时，脚本会询问：
+服务器上已经存在 `/etc/sing-box/config.json` 时，脚本会询问保留旧配置还是生成新配置。卸载后即使当前配置已经删除，只要 `/root/sbox-reality-backups/` 中存在有效备份，脚本也会询问：
 
 ```text
-1) Keep and reuse the existing configuration
-2) Back it up and generate a new configuration
+1) Restore this backup
+2) Ignore it and generate a new configuration
 3) Cancel
 ```
 
-- 选择 `1`：完整保留原来的服务端配置、端口、密码、密钥和客户端文件，只重新安装或更新 sing-box；本次输入的新协议参数不会覆盖旧配置。
-- 选择 `2`：先将旧配置、客户端文件、Surge 片段、HY2 URL 和默认证书备份到 `/root/sbox-reality-backups/`，再生成全新配置。
+- 恢复备份：还原服务端配置、端口、密码、密钥、客户端文件、证书和 HY2 端口跳跃配置，然后重新安装或更新 sing-box。
+- 保留当前配置：完整保留当前服务端配置和客户端文件，只更新 sing-box；本次输入的新协议参数不会覆盖旧配置。
+- 生成新配置：忽略旧备份，或者先备份当前配置，再生成全新配置。
 
 也可以直接指定，适合非交互执行：
 
 ```bash
 # 沿用旧配置，仅更新 sing-box
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode both --config keep
+
+# 卸载后恢复最近一次有效备份
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode both --config restore
 
 # 备份旧配置后生成全新配置
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode both --config new
@@ -272,7 +276,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 | 参数 | 说明 | 默认值 |
 | --- | --- | --- |
 | `-m`, `--mode` | 操作模式：`1`/`anytls`、`2`/`hy2`、`3`/`both`、`4`/`uninstall` | 交互菜单 |
-| `--config` | 发现旧配置时选择 `keep` 沿用或 `new` 备份后重建 | 交互询问 |
+| `--config` | 选择 `keep` 沿用当前配置、`restore` 恢复最近备份或 `new` 生成新配置 | 交互询问 |
 | `--uninstall` | 卸载范围：`anytls`、`hy2` 或 `all` | 卸载子菜单 |
 | `--purge` | 卸载全部配置时同时删除 sing-box 软件包 | 关闭 |
 | `-y`, `--yes` | 跳过卸载确认，适合非交互执行 | 关闭 |

@@ -58,6 +58,7 @@ ANYTLS_SHORT_ID=""
 HY2_PASSWORD=""
 HY2_SHARE_URL=""
 LAST_BACKUP_DIR=""
+LATEST_BACKUP_DIR=""
 
 usage() {
   cat << USAGE
@@ -76,6 +77,7 @@ Install modes:
 
 Reinstall options (shown when an existing config is found):
       --config keep    Keep the existing server/client config and only update sing-box
+      --config restore Restore the latest config from /root/sbox-reality-backups
       --config new     Back up the existing config and generate a new one
 
 Uninstall options:
@@ -713,27 +715,89 @@ backup_existing_files() {
   echo "Previous configuration backed up to: $backup_dir"
 }
 
+find_latest_backup() {
+  local candidate base key latest_key=""
+
+  LATEST_BACKUP_DIR=""
+  [[ -d "$BACKUP_ROOT" ]] || return 0
+
+  for candidate in "$BACKUP_ROOT"/*; do
+    [[ -d "$candidate" && -s "$candidate/$(basename "$SERVER_CONF")" ]] || continue
+    if command -v jq >/dev/null 2>&1 \
+      && ! jq -e . "$candidate/$(basename "$SERVER_CONF")" >/dev/null 2>&1; then
+      continue
+    fi
+    base="$(basename "$candidate")"
+    if [[ "$base" =~ ([0-9]{8}-[0-9]{6})-([0-9]+)$ ]]; then
+      printf -v key '%s-%020d' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+      if [[ -z "$latest_key" || "$key" > "$latest_key" ]]; then
+        latest_key="$key"
+        LATEST_BACKUP_DIR="$candidate"
+      fi
+    fi
+  done
+}
+
 choose_config_policy() {
   case "$CONFIG_POLICY" in
-    ask|""|keep|new)
+    ask|""|keep|restore|new)
       ;;
     *)
-      echo "Error: --config must be keep or new"
+      echo "Error: --config must be keep, restore, or new"
       exit 1
       ;;
   esac
+
+  find_latest_backup
 
   if [[ ! -s "$SERVER_CONF" ]]; then
     if [[ "$CONFIG_POLICY" == "keep" ]]; then
       echo "Error: --config keep was requested, but $SERVER_CONF does not exist"
       exit 1
     fi
+
+    if [[ "$CONFIG_POLICY" == "restore" ]]; then
+      if [[ -z "$LATEST_BACKUP_DIR" ]]; then
+        echo "Error: no restorable configuration was found in $BACKUP_ROOT"
+        exit 1
+      fi
+      return 0
+    fi
+
+    if [[ -n "$LATEST_BACKUP_DIR" && ( "$CONFIG_POLICY" == "ask" || -z "$CONFIG_POLICY" ) ]]; then
+      if [[ -t 0 ]]; then
+        echo
+        echo "A previous configuration backup was found:"
+        echo "  $LATEST_BACKUP_DIR"
+        echo "  1) Restore this backup"
+        echo "  2) Ignore it and generate a new configuration"
+        echo "  3) Cancel"
+        echo
+        read -rp "Select [1-3]: " CONFIG_POLICY
+        case "$CONFIG_POLICY" in
+          1) CONFIG_POLICY="restore" ;;
+          2) CONFIG_POLICY="new" ;;
+          3) echo "Cancelled"; exit 0 ;;
+          *) echo "Error: invalid selection"; exit 1 ;;
+        esac
+        return 0
+      fi
+
+      echo "Error: a previous configuration backup was found: $LATEST_BACKUP_DIR"
+      echo "Use --config restore to restore it, or --config new to ignore it"
+      exit 1
+    fi
+
     CONFIG_POLICY="new"
     return 0
   fi
 
   case "$CONFIG_POLICY" in
-    keep|new)
+    keep|new|restore)
+      if [[ "$CONFIG_POLICY" == "restore" && -z "$LATEST_BACKUP_DIR" ]]; then
+        echo "Error: no restorable configuration was found in $BACKUP_ROOT"
+        exit 1
+      fi
       return 0
       ;;
     ask|"")
@@ -745,19 +809,107 @@ choose_config_policy() {
     echo "Existing sing-box configuration found: $SERVER_CONF"
     echo "  1) Keep and reuse the existing configuration"
     echo "  2) Back it up and generate a new configuration"
-    echo "  3) Cancel"
+    if [[ -n "$LATEST_BACKUP_DIR" ]]; then
+      echo "  3) Restore the latest backup: $LATEST_BACKUP_DIR"
+      echo "  4) Cancel"
+    else
+      echo "  3) Cancel"
+    fi
     echo
-    read -rp "Select [1-3]: " CONFIG_POLICY
-    case "$CONFIG_POLICY" in
-      1) CONFIG_POLICY="keep" ;;
-      2) CONFIG_POLICY="new" ;;
-      3) echo "Cancelled"; exit 0 ;;
-      *) echo "Error: invalid selection"; exit 1 ;;
-    esac
+    if [[ -n "$LATEST_BACKUP_DIR" ]]; then
+      read -rp "Select [1-4]: " CONFIG_POLICY
+      case "$CONFIG_POLICY" in
+        1) CONFIG_POLICY="keep" ;;
+        2) CONFIG_POLICY="new" ;;
+        3) CONFIG_POLICY="restore" ;;
+        4) echo "Cancelled"; exit 0 ;;
+        *) echo "Error: invalid selection"; exit 1 ;;
+      esac
+    else
+      read -rp "Select [1-3]: " CONFIG_POLICY
+      case "$CONFIG_POLICY" in
+        1) CONFIG_POLICY="keep" ;;
+        2) CONFIG_POLICY="new" ;;
+        3) echo "Cancelled"; exit 0 ;;
+        *) echo "Error: invalid selection"; exit 1 ;;
+      esac
+    fi
   else
     echo "Error: an existing configuration was found"
-    echo "Use --config keep to reuse it, or --config new to replace it after backup"
+    echo "Use --config keep, --config restore, or --config new"
     exit 1
+  fi
+}
+
+restore_file_from_backup() {
+  local backup_dir="$1"
+  local destination="$2"
+  local source="${backup_dir}/$(basename "$destination")"
+
+  [[ -f "$source" ]] || return 0
+  mkdir -p "$(dirname "$destination")"
+  cp -p "$source" "$destination"
+}
+
+restore_latest_backup() {
+  local backup_config
+  local -a destinations=(
+    "$SERVER_CONF"
+    "$ANYTLS_CLIENT_OUT"
+    "$HY2_CLIENT_OUT"
+    "$SURGE_CONF"
+    "$HY2_URL_FILE"
+    "$ANYTLS_INFO"
+    "$HY2_INFO"
+    "$COMBINED_INFO"
+    "$PORT_ENV"
+    "$PORT_HELPER"
+    "$SYSTEMD_DROPIN"
+    "$DEFAULT_CERT_PATH"
+    "$DEFAULT_KEY_PATH"
+  )
+  local destination
+
+  [[ -n "$LATEST_BACKUP_DIR" ]] || {
+    echo "Error: no restorable configuration was found in $BACKUP_ROOT"
+    exit 1
+  }
+  backup_config="${LATEST_BACKUP_DIR}/$(basename "$SERVER_CONF")"
+
+  if [[ -s "$SERVER_CONF" ]]; then
+    backup_existing_files "before-restore"
+  fi
+
+  echo "Restoring configuration from: $LATEST_BACKUP_DIR"
+  echo "The selected install mode and new protocol options will not be applied."
+  install_dependencies
+  sing-box check -c "$backup_config"
+
+  systemctl stop sing-box >/dev/null 2>&1 || true
+  disable_hy2_port_hopping
+  for destination in "${destinations[@]}"; do
+    rm -f "$destination"
+  done
+
+  for destination in "${destinations[@]}"; do
+    restore_file_from_backup "$LATEST_BACKUP_DIR" "$destination"
+  done
+
+  if [[ -f "$PORT_HELPER" ]]; then
+    chmod +x "$PORT_HELPER"
+  fi
+
+  systemctl daemon-reload
+  systemctl enable sing-box
+  systemctl restart sing-box
+
+  echo
+  echo "Backup restore complete."
+  echo "  restored_from: $LATEST_BACKUP_DIR"
+  echo "  config: $SERVER_CONF"
+  if [[ -f "$COMBINED_INFO" ]]; then
+    echo
+    cat "$COMBINED_INFO"
   fi
 }
 
@@ -1344,6 +1496,11 @@ main() {
 
   apply_shared_port
   choose_config_policy
+
+  if [[ "$CONFIG_POLICY" == "restore" ]]; then
+    restore_latest_backup
+    return 0
+  fi
 
   if [[ "$CONFIG_POLICY" == "keep" ]]; then
     reuse_existing_config
