@@ -7,6 +7,7 @@
 - **AnyTLS + REALITY**
 - **Hysteria2 + Surge 端口跳跃**
 - **同时安装两个入站到同一个 sing-box 配置**
+- **按协议卸载、保留配置重装或生成全新配置**
 
 本项目专为 Debian / Ubuntu VPS 编写，默认自动选择一个当前未被占用的随机高端口，完成服务端部署，并生成可直接合并到客户端配置中的 `outbounds` 片段。
 
@@ -26,6 +27,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 1) AnyTLS + REALITY
 2) Hysteria2 + Surge port hopping
 3) Install both
+4) Uninstall
 ```
 
 也可以直接指定安装模式：
@@ -42,6 +44,59 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 ```
 
 同时安装时，脚本会生成同一个 `/etc/sing-box/config.json`，其中包含 `anytls-in` 和 `hy2-in` 两个入站；不会用第二个协议覆盖第一个协议。
+
+---
+
+## 重新安装与保留配置
+
+服务器上已经存在 `/etc/sing-box/config.json` 时，脚本会询问：
+
+```text
+1) Keep and reuse the existing configuration
+2) Back it up and generate a new configuration
+3) Cancel
+```
+
+- 选择 `1`：完整保留原来的服务端配置、端口、密码、密钥和客户端文件，只重新安装或更新 sing-box；本次输入的新协议参数不会覆盖旧配置。
+- 选择 `2`：先将旧配置、客户端文件、Surge 片段、HY2 URL 和默认证书备份到 `/root/sbox-reality-backups/`，再生成全新配置。
+
+也可以直接指定，适合非交互执行：
+
+```bash
+# 沿用旧配置，仅更新 sing-box
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode both --config keep
+
+# 备份旧配置后生成全新配置
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode both --config new
+```
+
+---
+
+## 卸载
+
+直接运行统一脚本并选择菜单 `4`，再选择只卸载 AnyTLS、只卸载 Hysteria2，或同时卸载两者：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh)
+```
+
+也可以用命令直接卸载：
+
+```bash
+# 只卸载 AnyTLS + REALITY，保留 HY2
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --uninstall anytls
+
+# 只卸载 HY2 和端口跳跃规则，保留 AnyTLS
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --uninstall hy2
+
+# 卸载两个配置，但保留 sing-box 程序
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --uninstall all
+
+# 完整卸载两个配置并删除 sing-box 软件包
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --uninstall all --purge
+```
+
+卸载前会要求确认，并把现有配置备份到 `/root/sbox-reality-backups/`。非交互执行时可以增加 `--yes`。只卸载一个协议时，脚本只删除对应的 `anytls-in` 或 `hy2-in`，另一个协议会继续运行；卸载 HY2 还会清理端口跳跃规则和 systemd 配置。
 
 ---
 
@@ -184,7 +239,9 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 ## 功能特性
 
 - 自动安装 / 更新 sing-box
-- 菜单选择安装 AnyTLS + REALITY、Hysteria2 + Surge，或同时安装
+- 菜单选择安装、重装或卸载
+- 重装时可沿用旧配置，或自动备份后生成新配置
+- 可单独卸载 AnyTLS、HY2，或完整卸载
 - 默认随机选择当前未被占用的高端口
 - 支持手动指定 AnyTLS 监听端口
 - 支持自定义随机端口范围
@@ -214,7 +271,11 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 
 | 参数 | 说明 | 默认值 |
 | --- | --- | --- |
-| `-m`, `--mode` | 安装模式：`1`/`anytls`、`2`/`hy2`、`3`/`both` | 交互菜单 |
+| `-m`, `--mode` | 操作模式：`1`/`anytls`、`2`/`hy2`、`3`/`both`、`4`/`uninstall` | 交互菜单 |
+| `--config` | 发现旧配置时选择 `keep` 沿用或 `new` 备份后重建 | 交互询问 |
+| `--uninstall` | 卸载范围：`anytls`、`hy2` 或 `all` | 卸载子菜单 |
+| `--purge` | 卸载全部配置时同时删除 sing-box 软件包 | 关闭 |
+| `-y`, `--yes` | 跳过卸载确认，适合非交互执行 | 关闭 |
 | `-d`, `--domain` | REALITY 握手域名 | `www.apple.com` |
 | `-p`, `--port` | 当前模式的监听端口；`--mode 1` 时对应 AnyTLS，`--mode 2` 时对应 Hysteria2 | `auto` |
 | `--anytls-port` | AnyTLS TCP 监听端口 | `auto` |

@@ -3,6 +3,11 @@ set -euo pipefail
 
 INSTALL_MODE="${INSTALL_MODE:-}"
 SHARED_PORT="${PORT:-}"
+ACTION="install"
+UNINSTALL_SCOPE="${UNINSTALL_SCOPE:-}"
+CONFIG_POLICY="${CONFIG_POLICY:-ask}"
+PURGE_SING_BOX=0
+ASSUME_YES=0
 
 REALITY_DOMAIN="${REALITY_DOMAIN:-${DOMAIN:-www.apple.com}}"
 ANYTLS_PORT="${ANYTLS_PORT:-auto}"
@@ -27,6 +32,7 @@ HY2_URL_FILE="/root/hysteria2-url.txt"
 ANYTLS_INFO="/root/anytls-reality-info.txt"
 HY2_INFO="/root/hysteria2-surge-info.txt"
 COMBINED_INFO="/root/sbox-reality-info.txt"
+BACKUP_ROOT="/root/sbox-reality-backups"
 
 PORT_ENV="/etc/sing-box/hy2-port-hopping.env"
 PORT_HELPER="/usr/local/bin/sing-box-hy2-port-hopping"
@@ -51,6 +57,7 @@ ANYTLS_PASSWORD=""
 ANYTLS_SHORT_ID=""
 HY2_PASSWORD=""
 HY2_SHARE_URL=""
+LAST_BACKUP_DIR=""
 
 usage() {
   cat << USAGE
@@ -59,11 +66,22 @@ Usage:
   bash $0 --mode 1
   bash $0 --mode 2
   bash $0 --mode both
+  bash $0 --uninstall anytls|hy2|all
 
 Install modes:
   1, anytls     Install AnyTLS + REALITY
   2, hy2        Install Hysteria2 + Surge port hopping
   3, both       Install both in the same sing-box config
+  4, uninstall  Uninstall one or both configurations
+
+Reinstall options (shown when an existing config is found):
+      --config keep    Keep the existing server/client config and only update sing-box
+      --config new     Back up the existing config and generate a new one
+
+Uninstall options:
+      --uninstall      Uninstall scope: anytls, hy2, or all
+      --purge          Also remove the sing-box package (only with --uninstall all)
+  -y, --yes            Skip uninstall confirmation
 
 AnyTLS + REALITY options:
   -d, --domain        REALITY handshake domain, default: www.apple.com
@@ -83,12 +101,13 @@ Hysteria2 + Surge options:
       --name          Surge proxy name, default: HY2
 
 Shared:
-  -m, --mode          Install mode: 1, 2, 3, anytls, hy2, both
+  -m, --mode          Mode: 1, 2, 3, 4, anytls, hy2, both, uninstall
   -p, --port          Port for mode 1 or mode 2. Use --anytls-port and --hy2-port for both mode
   -h, --help          Show help
 
 Environment variables:
-  INSTALL_MODE, PORT, REALITY_DOMAIN, DOMAIN, ANYTLS_PORT,
+  INSTALL_MODE, CONFIG_POLICY, UNINSTALL_SCOPE, PORT,
+  REALITY_DOMAIN, DOMAIN, ANYTLS_PORT,
   HIGH_PORT_MIN, HIGH_PORT_MAX,
   HY2_SNI, SNI, HY2_PORT, HOP_PORTS, HOP_INTERVAL,
   UP_MBPS, DOWN_MBPS, OBFS, OBFS_PASSWORD, CERT_PATH, KEY_PATH, PROXY_NAME
@@ -111,6 +130,39 @@ while [[ $# -gt 0 ]]; do
       ;;
     3|both|all)
       INSTALL_MODE="3"
+      shift
+      ;;
+    4|uninstall|remove)
+      INSTALL_MODE="4"
+      shift
+      ;;
+    --uninstall)
+      ACTION="uninstall"
+      if [[ -n "${2:-}" && "${2:-}" != -* ]]; then
+        UNINSTALL_SCOPE="$2"
+        shift 2
+      else
+        shift
+      fi
+      ;;
+    --config)
+      CONFIG_POLICY="${2:-}"
+      shift 2
+      ;;
+    --keep-config)
+      CONFIG_POLICY="keep"
+      shift
+      ;;
+    --new-config)
+      CONFIG_POLICY="new"
+      shift
+      ;;
+    --purge)
+      PURGE_SING_BOX=1
+      shift
+      ;;
+    -y|--yes)
+      ASSUME_YES=1
       shift
       ;;
     -d|--domain|--reality-domain)
@@ -183,17 +235,18 @@ while [[ $# -gt 0 ]]; do
 done
 
 choose_mode() {
-  if [[ -n "$INSTALL_MODE" ]]; then
+  if [[ "$ACTION" == "uninstall" || -n "$INSTALL_MODE" ]]; then
     return 0
   fi
 
   if [[ -t 0 ]]; then
-    echo "Choose install mode:"
+    echo "Choose an operation:"
     echo "  1) AnyTLS + REALITY"
     echo "  2) Hysteria2 + Surge port hopping"
     echo "  3) Install both"
+    echo "  4) Uninstall"
     echo
-    read -rp "Select [1-3]: " INSTALL_MODE
+    read -rp "Select [1-4]: " INSTALL_MODE
   else
     echo "Error: install mode is required in non-interactive mode"
     echo "Example: bash $0 --mode both"
@@ -202,6 +255,10 @@ choose_mode() {
 }
 
 normalize_mode() {
+  if [[ "$ACTION" == "uninstall" ]]; then
+    return 0
+  fi
+
   case "$INSTALL_MODE" in
     1|anytls|reality)
       INSTALL_ANYTLS=1
@@ -213,12 +270,55 @@ normalize_mode() {
       INSTALL_ANYTLS=1
       INSTALL_HY2=1
       ;;
+    4|uninstall|remove)
+      ACTION="uninstall"
+      ;;
     *)
       echo "Error: invalid install mode: $INSTALL_MODE"
       usage
       exit 1
       ;;
   esac
+}
+
+choose_uninstall_scope() {
+  [[ "$ACTION" == "uninstall" ]] || return 0
+
+  if [[ -z "$UNINSTALL_SCOPE" ]]; then
+    if [[ -t 0 ]]; then
+      echo "Choose uninstall scope:"
+      echo "  1) AnyTLS + REALITY only"
+      echo "  2) Hysteria2 + port hopping only"
+      echo "  3) Both configurations"
+      echo
+      read -rp "Select [1-3]: " UNINSTALL_SCOPE
+    else
+      echo "Error: uninstall scope is required in non-interactive mode"
+      echo "Example: bash $0 --uninstall all --yes"
+      exit 1
+    fi
+  fi
+
+  case "$UNINSTALL_SCOPE" in
+    1|anytls|reality)
+      UNINSTALL_SCOPE="anytls"
+      ;;
+    2|hy2|hysteria2|surge)
+      UNINSTALL_SCOPE="hy2"
+      ;;
+    3|both|all)
+      UNINSTALL_SCOPE="all"
+      ;;
+    *)
+      echo "Error: invalid uninstall scope: $UNINSTALL_SCOPE"
+      exit 1
+      ;;
+  esac
+
+  if (( PURGE_SING_BOX )) && [[ "$UNINSTALL_SCOPE" != "all" ]]; then
+    echo "Error: --purge can only be used with --uninstall all"
+    exit 1
+  fi
 }
 
 apply_shared_port() {
@@ -580,6 +680,252 @@ disable_hy2_port_hopping() {
   rm -f "$SYSTEMD_DROPIN" "$PORT_ENV"
 }
 
+backup_existing_files() {
+  local reason="$1"
+  local backup_dir source
+  local -a sources=(
+    "$SERVER_CONF"
+    "$ANYTLS_CLIENT_OUT"
+    "$HY2_CLIENT_OUT"
+    "$SURGE_CONF"
+    "$HY2_URL_FILE"
+    "$ANYTLS_INFO"
+    "$HY2_INFO"
+    "$COMBINED_INFO"
+    "$PORT_ENV"
+    "$PORT_HELPER"
+    "$SYSTEMD_DROPIN"
+    "$DEFAULT_CERT_PATH"
+    "$DEFAULT_KEY_PATH"
+  )
+
+  backup_dir="${BACKUP_ROOT}/${reason}-$(date +%Y%m%d-%H%M%S)-$$"
+  mkdir -p "$backup_dir"
+  chmod 700 "$BACKUP_ROOT" "$backup_dir"
+
+  for source in "${sources[@]}"; do
+    if [[ -f "$source" ]]; then
+      cp -p "$source" "$backup_dir/$(basename "$source")"
+    fi
+  done
+
+  LAST_BACKUP_DIR="$backup_dir"
+  echo "Previous configuration backed up to: $backup_dir"
+}
+
+choose_config_policy() {
+  case "$CONFIG_POLICY" in
+    ask|""|keep|new)
+      ;;
+    *)
+      echo "Error: --config must be keep or new"
+      exit 1
+      ;;
+  esac
+
+  if [[ ! -s "$SERVER_CONF" ]]; then
+    if [[ "$CONFIG_POLICY" == "keep" ]]; then
+      echo "Error: --config keep was requested, but $SERVER_CONF does not exist"
+      exit 1
+    fi
+    CONFIG_POLICY="new"
+    return 0
+  fi
+
+  case "$CONFIG_POLICY" in
+    keep|new)
+      return 0
+      ;;
+    ask|"")
+      ;;
+  esac
+
+  if [[ -t 0 ]]; then
+    echo
+    echo "Existing sing-box configuration found: $SERVER_CONF"
+    echo "  1) Keep and reuse the existing configuration"
+    echo "  2) Back it up and generate a new configuration"
+    echo "  3) Cancel"
+    echo
+    read -rp "Select [1-3]: " CONFIG_POLICY
+    case "$CONFIG_POLICY" in
+      1) CONFIG_POLICY="keep" ;;
+      2) CONFIG_POLICY="new" ;;
+      3) echo "Cancelled"; exit 0 ;;
+      *) echo "Error: invalid selection"; exit 1 ;;
+    esac
+  else
+    echo "Error: an existing configuration was found"
+    echo "Use --config keep to reuse it, or --config new to replace it after backup"
+    exit 1
+  fi
+}
+
+reuse_existing_config() {
+  backup_existing_files "reinstall-keep"
+  echo "Keeping the existing configuration; new mode and protocol options will not be applied."
+  install_dependencies
+
+  sing-box check -c "$SERVER_CONF"
+  systemctl daemon-reload
+  systemctl enable sing-box
+  systemctl restart sing-box
+
+  echo
+  echo "Reinstall complete. The existing configuration and credentials were kept."
+  echo "  config: $SERVER_CONF"
+  echo "  backup: $LAST_BACKUP_DIR"
+
+  if [[ -f "$COMBINED_INFO" ]]; then
+    echo
+    cat "$COMBINED_INFO"
+  fi
+}
+
+confirm_uninstall() {
+  (( ASSUME_YES )) && return 0
+
+  if [[ ! -t 0 ]]; then
+    echo "Error: uninstall confirmation is required; use --yes in non-interactive mode"
+    exit 1
+  fi
+
+  echo
+  echo "Uninstall scope: $UNINSTALL_SCOPE"
+  if (( PURGE_SING_BOX )); then
+    echo "The sing-box package will also be removed."
+  else
+    echo "The sing-box package will be kept."
+  fi
+  read -rp "Continue? [y/N]: " answer
+  case "$answer" in
+    y|Y|yes|YES) ;;
+    *) echo "Cancelled"; exit 0 ;;
+  esac
+}
+
+remove_anytls_files() {
+  rm -f "$ANYTLS_CLIENT_OUT" "$ANYTLS_INFO"
+}
+
+remove_hy2_files() {
+  disable_hy2_port_hopping
+  rm -f "$PORT_HELPER" "$HY2_CLIENT_OUT" "$SURGE_CONF" "$HY2_URL_FILE" "$HY2_INFO"
+  if [[ ! -s "$SERVER_CONF" ]] || ! jq -e --arg path "$DEFAULT_CERT_PATH" \
+    '.. | strings | select(. == $path)' "$SERVER_CONF" >/dev/null 2>&1; then
+    rm -f "$DEFAULT_CERT_PATH"
+  fi
+  if [[ ! -s "$SERVER_CONF" ]] || ! jq -e --arg path "$DEFAULT_KEY_PATH" \
+    '.. | strings | select(. == $path)' "$SERVER_CONF" >/dev/null 2>&1; then
+    rm -f "$DEFAULT_KEY_PATH"
+  fi
+  rmdir "$(dirname "$SYSTEMD_DROPIN")" 2>/dev/null || true
+}
+
+uninstall_selected() {
+  local remove_anytls=false
+  local remove_hy2=false
+  local matched=0
+  local remaining=0
+  local temp_config=""
+
+  case "$UNINSTALL_SCOPE" in
+    anytls)
+      remove_anytls=true
+      ;;
+    hy2)
+      remove_hy2=true
+      ;;
+    all)
+      remove_anytls=true
+      remove_hy2=true
+      ;;
+  esac
+
+  confirm_uninstall
+  backup_existing_files "uninstall-${UNINSTALL_SCOPE}"
+
+  if [[ -s "$SERVER_CONF" ]]; then
+    if ! command -v jq >/dev/null 2>&1; then
+      echo "Installing jq for safe JSON configuration editing..."
+      apt update
+      apt install -y jq
+    fi
+
+    if ! jq -e . "$SERVER_CONF" >/dev/null; then
+      echo "Error: $SERVER_CONF is not valid JSON; no server configuration was changed"
+      exit 1
+    fi
+
+    matched="$(jq --argjson remove_anytls "$remove_anytls" --argjson remove_hy2 "$remove_hy2" '
+      [(.inbounds // [])[]
+        | select(
+            (($remove_anytls == true) and (.tag == "anytls-in"))
+            or (($remove_hy2 == true) and (.tag == "hy2-in"))
+          )
+      ] | length
+    ' "$SERVER_CONF")"
+
+    if (( matched > 0 )); then
+      temp_config="$(mktemp)"
+      jq --argjson remove_anytls "$remove_anytls" --argjson remove_hy2 "$remove_hy2" '
+        .inbounds = [
+          (.inbounds // [])[]
+          | select(
+              (($remove_anytls == false) or (.tag != "anytls-in"))
+              and (($remove_hy2 == false) or (.tag != "hy2-in"))
+            )
+        ]
+      ' "$SERVER_CONF" > "$temp_config"
+      remaining="$(jq '(.inbounds // []) | length' "$temp_config")"
+
+      if (( remaining > 0 )); then
+        sing-box check -c "$temp_config"
+        install -m 600 "$temp_config" "$SERVER_CONF"
+      else
+        systemctl disable --now sing-box >/dev/null 2>&1 || true
+        rm -f "$SERVER_CONF"
+      fi
+      rm -f "$temp_config"
+    fi
+  fi
+
+  if [[ "$remove_anytls" == true ]]; then
+    remove_anytls_files
+  fi
+  if [[ "$remove_hy2" == true ]]; then
+    remove_hy2_files
+  fi
+  rm -f "$COMBINED_INFO"
+
+  systemctl daemon-reload
+
+  if (( matched > 0 && remaining > 0 )); then
+    systemctl enable sing-box
+    systemctl restart sing-box
+  fi
+
+  if (( PURGE_SING_BOX )); then
+    if [[ -s "$SERVER_CONF" ]] && command -v jq >/dev/null 2>&1 \
+      && (( $(jq '(.inbounds // []) | length' "$SERVER_CONF") > 0 )); then
+      echo "Error: other sing-box inbounds remain, so the package was not removed"
+      echo "Configuration backup: $LAST_BACKUP_DIR"
+      exit 1
+    fi
+    systemctl disable --now sing-box >/dev/null 2>&1 || true
+    apt purge -y sing-box
+  fi
+
+  echo
+  echo "Uninstall complete."
+  echo "  scope: $UNINSTALL_SCOPE"
+  echo "  removed_matching_inbounds: $matched"
+  echo "  backup: $LAST_BACKUP_DIR"
+  if (( ! PURGE_SING_BOX )); then
+    echo "  sing-box package: kept"
+  fi
+}
+
 prepare_inputs() {
   REALITY_DOMAIN="$(strip_host "$REALITY_DOMAIN")"
   HY2_SNI="$(strip_host "$HY2_SNI")"
@@ -662,7 +1008,7 @@ prepare_inputs() {
 install_dependencies() {
   echo "Installing dependencies..."
   apt update
-  apt install -y curl openssl ca-certificates iproute2 coreutils nftables iptables
+  apt install -y curl openssl ca-certificates iproute2 coreutils jq nftables iptables
   curl -fsSL https://sing-box.app/install.sh | sh
   mkdir -p /etc/sing-box
 }
@@ -754,8 +1100,6 @@ $(hy2_inbound_json)"
   else
     inbounds="$(hy2_inbound_json)"
   fi
-
-  cp "$SERVER_CONF" "$SERVER_CONF.bak.$(date +%s)" 2>/dev/null || true
 
   cat > "$SERVER_CONF" << JSON
 {
@@ -975,7 +1319,12 @@ print_summary() {
 main() {
   choose_mode
   normalize_mode
-  apply_shared_port
+  choose_uninstall_scope
+
+  if (( PURGE_SING_BOX )) && [[ "$ACTION" != "uninstall" ]]; then
+    echo "Error: --purge can only be used with --uninstall all"
+    exit 1
+  fi
 
   if [[ $EUID -ne 0 ]]; then
     echo "Error: please run as root"
@@ -986,6 +1335,23 @@ main() {
   if ! command -v apt >/dev/null 2>&1; then
     echo "Error: this script only supports Debian/Ubuntu with apt"
     exit 1
+  fi
+
+  if [[ "$ACTION" == "uninstall" ]]; then
+    uninstall_selected
+    return 0
+  fi
+
+  apply_shared_port
+  choose_config_policy
+
+  if [[ "$CONFIG_POLICY" == "keep" ]]; then
+    reuse_existing_config
+    return 0
+  fi
+
+  if [[ -s "$SERVER_CONF" ]]; then
+    backup_existing_files "reinstall-new"
   fi
 
   prepare_inputs
