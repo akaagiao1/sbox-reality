@@ -9,7 +9,9 @@
 - **同时安装两个入站到同一个 sing-box 配置**
 - **按协议卸载、保留配置重装或生成全新配置**
 
-本项目专为 Debian / Ubuntu VPS 编写，默认自动选择一个当前未被占用的随机高端口，完成服务端部署，并生成可直接合并到客户端配置中的 `outbounds` 片段。
+本项目支持 Debian、Ubuntu 和 Alpine Linux VPS，默认自动选择一个当前未被占用的随机高端口，完成服务端部署，并生成可直接合并到客户端配置中的 `outbounds` 片段。
+
+脚本会从 sing-box 官方 Releases 自动选择并安装最新 alpha 版本，以支持 Hysteria2 Gecko 等最新功能。
 
 ---
 
@@ -18,6 +20,13 @@
 推荐使用统一脚本：
 
 ```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh)
+```
+
+Alpine Linux 默认没有 Bash，请先安装启动脚本所需的基础工具：
+
+```sh
+apk add --no-cache bash curl
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh)
 ```
 
@@ -53,9 +62,9 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 服务器上已经存在 `/etc/sing-box/config.json` 时，脚本会询问保留旧配置还是生成新配置。卸载后即使当前配置已经删除，只要 `/root/sbox-reality-backups/` 中存在有效备份，脚本也会询问：
 
 ```text
-1) Restore this backup
-2) Ignore it and generate a new configuration
-3) Cancel
+1) 恢复此备份
+2) 忽略备份并生成新配置
+3) 取消
 ```
 
 - 恢复备份：还原服务端配置、端口、密码、密钥、客户端文件、证书和 HY2 端口跳跃配置，然后重新安装或更新 sing-box。
@@ -101,7 +110,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --uninstall all --purge
 ```
 
-卸载前会要求确认，并把现有配置备份到 `/root/sbox-reality-backups/`。卸载备份采用单份轮换，只保留最新的一份；如果服务器已经没有配置，则不会创建空备份，也不会删除已有的有效备份。非交互执行时可以增加 `--yes`。只卸载一个协议时，脚本只删除对应的 `anytls-in` 或 `hy2-in`，另一个协议会继续运行；卸载 HY2 还会清理端口跳跃规则和 systemd 配置。
+卸载前会要求确认，并把现有配置备份到 `/root/sbox-reality-backups/`。卸载备份采用单份轮换，只保留最新的一份；如果服务器已经没有配置，则不会创建空备份，也不会删除已有的有效备份。非交互执行时可以增加 `--yes`。只卸载一个协议时，脚本只删除对应的 `anytls-in` 或 `hy2-in`，另一个协议会继续运行；卸载 HY2 还会清理端口跳跃规则以及 systemd/OpenRC 服务配置。
 
 ---
 
@@ -172,6 +181,7 @@ HIGH_PORT_MIN=30000 HIGH_PORT_MAX=50000 bash <(curl -fsSL https://raw.githubuser
 - Hysteria2 公开 UDP 跳跃端口：`20000-50000`
 - sing-box 实际监听端口：默认使用跳跃范围里的第一个端口
 - Surge 端口跳跃间隔：`30` 秒
+- Hysteria2 Gecko 混淆：默认开启，包长范围 `512-1200`
 - 证书：自动生成自签证书，Surge 片段默认带 `skip-cert-verify=true`
 
 ```bash
@@ -190,23 +200,25 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode 2 --port 8443 --ports 20000-50000
 ```
 
-开启 Hysteria2 Salamander 混淆：
+Gecko 默认开启；也可以显式指定，或切换回 Salamander/关闭混淆：
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode 2 --ports 20000-50000 --obfs
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode 2 --obfs-type salamander
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode 2 --obfs-type off
 ```
 
 安装完成后会输出 Hysteria2 URL、Surge 片段和 sing-box 客户端 `outbounds`。Hysteria2 URL 可直接复制到支持 `hysteria2://` 分享链接的客户端，例如：
 
 ```text
-hysteria2://auto-generated-password@1.2.3.4:20000-50000/?insecure=1&sni=www.bing.com#HY2
+hysteria2://auto-generated-password@1.2.3.4:20000-50000/?insecure=1&sni=www.bing.com&obfs=gecko&obfs-password=自动生成#HY2
 ```
 
 Surge 片段示例：
 
 ```ini
 [Proxy]
-HY2 = hysteria2, 你的VPS_IP, 20000, password=自动生成, skip-cert-verify=true, sni=www.bing.com, port-hopping="20000-50000", port-hopping-interval=30
+HY2 = hysteria2, 你的VPS_IP, 20000, password=自动生成, skip-cert-verify=true, sni=www.bing.com, port-hopping="20000-50000", port-hopping-interval=30, gecko-password=自动生成
 
 [Proxy Group]
 Proxy = select, HY2, DIRECT
@@ -264,9 +276,9 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 
 ## 系统要求
 
-- Debian / Ubuntu
+- Debian / Ubuntu（systemd）或 Alpine Linux（OpenRC）
 - root 权限
-- 系统使用 `apt`
+- 系统使用 `apt` 或 `apk`
 - VPS 防火墙或云厂商安全组已放行脚本最终输出的 TCP 端口
 - 使用 Hysteria2 端口跳跃时，需要放行脚本最终输出的 UDP 跳跃端口范围
 
@@ -318,8 +330,10 @@ Hysteria2 + Surge 参数：
 | `-i`, `--interval` | 端口跳跃间隔秒数，最小 `5` | `30` |
 | `--up` | 服务端上传带宽 Mbps，可选 | 不限制 |
 | `--down` | 服务端下载带宽 Mbps，可选 | 不限制 |
-| `--obfs` | 开启 Salamander 混淆 | 关闭 |
-| `--obfs-password` | 指定 Salamander 混淆密码 | 自动生成 |
+| `--obfs` | 开启 Gecko 混淆 | 已开启 |
+| `--obfs-type` | 混淆类型：`gecko`、`salamander` 或 `off` | `gecko` |
+| `--obfs-password` | 指定 Gecko/Salamander 混淆密码 | 自动生成 |
+| `--gecko-min`, `--gecko-max` | Gecko 最小/最大包长 | `512` / `1200` |
 | `--cert`, `--key` | 使用已有 TLS 证书和私钥 | 自动生成自签证书 |
 | `--name` | Surge 代理名称 | `HY2` |
 
@@ -345,7 +359,8 @@ Hysteria2 URL：/root/hysteria2-url.txt
 Surge 配置片段：/root/surge-hysteria2.conf
 安装信息：/root/hysteria2-surge-info.txt
 端口跳跃 helper：/usr/local/bin/sing-box-hy2-port-hopping
-端口跳跃 systemd drop-in：/etc/systemd/system/sing-box.service.d/10-hy2-port-hopping.conf
+端口跳跃 systemd drop-in（Debian/Ubuntu）：/etc/systemd/system/sing-box.service.d/10-hy2-port-hopping.conf
+端口跳跃 OpenRC 服务（Alpine）：/etc/init.d/sing-box-hy2-port-hopping
 ```
 
 查看客户端 `outbounds`：
@@ -405,18 +420,24 @@ cat /root/hysteria2-url.txt
 
 ```bash
 systemctl status sing-box --no-pager
+# Alpine
+rc-service sing-box status
 ```
 
 查看日志：
 
 ```bash
 journalctl -u sing-box -f
+# Alpine
+tail -f /var/log/messages
 ```
 
 重启：
 
 ```bash
 systemctl restart sing-box
+# Alpine
+rc-service sing-box restart
 ```
 
 检查配置：

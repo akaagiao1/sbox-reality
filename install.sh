@@ -20,8 +20,10 @@ HOP_PORTS="${HOP_PORTS:-20000-50000}"
 HOP_INTERVAL="${HOP_INTERVAL:-30}"
 UP_MBPS="${UP_MBPS:-}"
 DOWN_MBPS="${DOWN_MBPS:-}"
-OBFS="${OBFS:-off}"
+OBFS="${OBFS:-gecko}"
 OBFS_PASSWORD="${OBFS_PASSWORD:-}"
+GECKO_MIN_PACKET_SIZE="${GECKO_MIN_PACKET_SIZE:-512}"
+GECKO_MAX_PACKET_SIZE="${GECKO_MAX_PACKET_SIZE:-1200}"
 PROXY_NAME="${PROXY_NAME:-HY2}"
 
 SERVER_CONF="/etc/sing-box/config.json"
@@ -37,6 +39,7 @@ BACKUP_ROOT="/root/sbox-reality-backups"
 PORT_ENV="/etc/sing-box/hy2-port-hopping.env"
 PORT_HELPER="/usr/local/bin/sing-box-hy2-port-hopping"
 SYSTEMD_DROPIN="/etc/systemd/system/sing-box.service.d/10-hy2-port-hopping.conf"
+OPENRC_PORT_SERVICE="/etc/init.d/sing-box-hy2-port-hopping"
 DEFAULT_CERT_PATH="/etc/sing-box/hysteria2.crt"
 DEFAULT_KEY_PATH="/etc/sing-box/hysteria2.key"
 CERT_PATH="${CERT_PATH:-$DEFAULT_CERT_PATH}"
@@ -59,6 +62,77 @@ HY2_PASSWORD=""
 HY2_SHARE_URL=""
 LAST_BACKUP_DIR=""
 LATEST_BACKUP_DIR=""
+PLATFORM=""
+SERVICE_MANAGER=""
+
+detect_platform() {
+  if [[ -f /etc/alpine-release ]] && command -v apk >/dev/null 2>&1; then
+    PLATFORM="alpine"
+    SERVICE_MANAGER="openrc"
+  elif command -v apt >/dev/null 2>&1; then
+    PLATFORM="debian"
+    SERVICE_MANAGER="systemd"
+  else
+    echo "错误：本脚本仅支持 Debian、Ubuntu 和 Alpine Linux"
+    exit 1
+  fi
+}
+
+service_reload() {
+  if [[ "$SERVICE_MANAGER" == "systemd" ]]; then
+    systemctl daemon-reload
+  fi
+}
+
+service_enable() {
+  if [[ "$SERVICE_MANAGER" == "systemd" ]]; then
+    systemctl enable sing-box
+  else
+    rc-update add sing-box default >/dev/null 2>&1 || true
+  fi
+}
+
+service_stop() {
+  if [[ "$SERVICE_MANAGER" == "systemd" ]]; then
+    systemctl stop sing-box >/dev/null 2>&1 || true
+  else
+    rc-service sing-box stop >/dev/null 2>&1 || true
+  fi
+}
+
+service_restart() {
+  if [[ "$SERVICE_MANAGER" == "systemd" ]]; then
+    systemctl restart sing-box
+  else
+    rc-service sing-box restart >/dev/null 2>&1 || rc-service sing-box start
+  fi
+}
+
+service_disable() {
+  if [[ "$SERVICE_MANAGER" == "systemd" ]]; then
+    systemctl disable --now sing-box >/dev/null 2>&1 || true
+  else
+    rc-service sing-box stop >/dev/null 2>&1 || true
+    rc-update del sing-box default >/dev/null 2>&1 || true
+  fi
+}
+
+install_jq() {
+  if [[ "$PLATFORM" == "alpine" ]]; then
+    apk add --no-cache jq
+  else
+    apt update
+    apt install -y jq
+  fi
+}
+
+purge_sing_box_package() {
+  if [[ "$PLATFORM" == "alpine" ]]; then
+    apk del sing-box
+  else
+    apt purge -y sing-box
+  fi
+}
 
 usage() {
   cat << USAGE
@@ -98,8 +172,11 @@ Hysteria2 + Surge 选项：
   -i, --interval      端口跳跃间隔（秒），最小 5，默认：30
       --up            服务端上传带宽（Mbps），可选
       --down          服务端下载带宽（Mbps），可选
-      --obfs          启用 Hysteria2 Salamander 混淆
-      --obfs-password Salamander 混淆密码
+      --obfs          启用 Hysteria2 Gecko 混淆（默认）
+      --obfs-type     混淆类型：gecko、salamander 或 off
+      --obfs-password Gecko/Salamander 混淆密码
+      --gecko-min     Gecko 最小包长，默认：512
+      --gecko-max     Gecko 最大包长，默认：1200
       --cert          现有 TLS 证书路径
       --key           现有 TLS 私钥路径
       --name          Surge 代理名称，默认：HY2
@@ -114,7 +191,9 @@ Hysteria2 + Surge 选项：
   REALITY_DOMAIN, DOMAIN, ANYTLS_PORT,
   HIGH_PORT_MIN, HIGH_PORT_MAX,
   HY2_SNI, SNI, HY2_PORT, HOP_PORTS, HOP_INTERVAL,
-  UP_MBPS, DOWN_MBPS, OBFS, OBFS_PASSWORD, CERT_PATH, KEY_PATH, PROXY_NAME
+  UP_MBPS, DOWN_MBPS, OBFS, OBFS_PASSWORD,
+  GECKO_MIN_PACKET_SIZE, GECKO_MAX_PACKET_SIZE,
+  CERT_PATH, KEY_PATH, PROXY_NAME
 USAGE
 }
 
@@ -211,12 +290,23 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --obfs)
-      OBFS="on"
+      OBFS="gecko"
       shift
       ;;
+    --obfs-type)
+      OBFS="${2:-}"
+      shift 2
+      ;;
     --obfs-password)
-      OBFS="on"
       OBFS_PASSWORD="${2:-}"
+      shift 2
+      ;;
+    --gecko-min)
+      GECKO_MIN_PACKET_SIZE="${2:-}"
+      shift 2
+      ;;
+    --gecko-max)
+      GECKO_MAX_PACKET_SIZE="${2:-}"
       shift 2
       ;;
     --cert)
@@ -484,14 +574,25 @@ json_number_field() {
 }
 
 json_obfs_field() {
-  [[ "$OBFS" == "on" ]] || return 0
+  [[ "$OBFS" != "off" ]] || return 0
 
-  cat << JSON
+  if [[ "$OBFS" == "gecko" ]]; then
+    cat << JSON
+      "obfs": {
+        "type": "gecko",
+        "password": "${OBFS_PASSWORD}",
+        "min_packet_size": ${GECKO_MIN_PACKET_SIZE},
+        "max_packet_size": ${GECKO_MAX_PACKET_SIZE}
+      },
+JSON
+  else
+    cat << JSON
       "obfs": {
         "type": "salamander",
         "password": "${OBFS_PASSWORD}"
       },
 JSON
+  fi
 }
 
 surge_extra_params() {
@@ -501,7 +602,9 @@ surge_extra_params() {
     extra="${extra}, download-bandwidth=${DOWN_MBPS}"
   fi
 
-  if [[ "$OBFS" == "on" ]]; then
+  if [[ "$OBFS" == "gecko" ]]; then
+    extra="${extra}, gecko-password=${OBFS_PASSWORD}"
+  elif [[ "$OBFS" == "salamander" ]]; then
     extra="${extra}, salamander-password=${OBFS_PASSWORD}"
   fi
 
@@ -535,8 +638,8 @@ build_hy2_share_url() {
   uri_ports="${NORMALIZED_HOP_PORTS//;/,}"
   query="insecure=1&sni=$(url_encode "$HY2_SNI")"
 
-  if [[ "$OBFS" == "on" ]]; then
-    query="${query}&obfs=salamander&obfs-password=$(url_encode "$OBFS_PASSWORD")"
+  if [[ "$OBFS" != "off" ]]; then
+    query="${query}&obfs=${OBFS}&obfs-password=$(url_encode "$OBFS_PASSWORD")"
   fi
 
   HY2_SHARE_URL="hysteria2://$(url_encode "$HY2_PASSWORD")@${SERVER_IP}:${uri_ports}/?${query}#$(url_encode "$PROXY_NAME")"
@@ -573,7 +676,7 @@ prepare_certificate() {
 }
 
 write_port_hopping_helper() {
-  mkdir -p /etc/sing-box "$(dirname "$PORT_HELPER")" "$(dirname "$SYSTEMD_DROPIN")"
+  mkdir -p /etc/sing-box "$(dirname "$PORT_HELPER")"
 
   cat > "$PORT_ENV" << ENV
 HOP_PORTS="${NORMALIZED_HOP_PORTS}"
@@ -682,20 +785,57 @@ SH
 
   chmod +x "$PORT_HELPER"
 
-  cat > "$SYSTEMD_DROPIN" << DROPIN
+  if [[ "$SERVICE_MANAGER" == "systemd" ]]; then
+    mkdir -p "$(dirname "$SYSTEMD_DROPIN")"
+    rm -f "$OPENRC_PORT_SERVICE"
+    cat > "$SYSTEMD_DROPIN" << DROPIN
 [Service]
 ExecStartPre=+${PORT_HELPER} clean
 ExecStartPre=+${PORT_HELPER} apply
 ExecStopPost=+${PORT_HELPER} clean
 DROPIN
+  else
+    rm -f "$SYSTEMD_DROPIN"
+    cat > "$OPENRC_PORT_SERVICE" << OPENRC
+#!/sbin/openrc-run
+
+description="sing-box Hysteria2 端口跳跃规则"
+
+depend() {
+  need net
+  before sing-box
+}
+
+start() {
+  ebegin "应用 Hysteria2 端口跳跃规则"
+  ${PORT_HELPER} apply
+  eend \$?
+}
+
+stop() {
+  ebegin "清理 Hysteria2 端口跳跃规则"
+  ${PORT_HELPER} clean
+  eend \$?
+}
+OPENRC
+    chmod +x "$OPENRC_PORT_SERVICE"
+    rc-update add sing-box-hy2-port-hopping default >/dev/null 2>&1 || true
+    rc-service sing-box-hy2-port-hopping restart >/dev/null 2>&1 \
+      || rc-service sing-box-hy2-port-hopping start
+  fi
 }
 
 disable_hy2_port_hopping() {
+  if [[ "$SERVICE_MANAGER" == "openrc" ]]; then
+    rc-service sing-box-hy2-port-hopping stop >/dev/null 2>&1 || true
+    rc-update del sing-box-hy2-port-hopping default >/dev/null 2>&1 || true
+  fi
+
   if [[ -x "$PORT_HELPER" ]]; then
     "$PORT_HELPER" clean >/dev/null 2>&1 || true
   fi
 
-  rm -f "$SYSTEMD_DROPIN" "$PORT_ENV"
+  rm -f "$SYSTEMD_DROPIN" "$OPENRC_PORT_SERVICE" "$PORT_ENV"
 }
 
 backup_existing_files() {
@@ -713,6 +853,7 @@ backup_existing_files() {
     "$PORT_ENV"
     "$PORT_HELPER"
     "$SYSTEMD_DROPIN"
+    "$OPENRC_PORT_SERVICE"
     "$DEFAULT_CERT_PATH"
     "$DEFAULT_KEY_PATH"
   )
@@ -929,6 +1070,7 @@ restore_latest_backup() {
     "$PORT_ENV"
     "$PORT_HELPER"
     "$SYSTEMD_DROPIN"
+    "$OPENRC_PORT_SERVICE"
     "$DEFAULT_CERT_PATH"
     "$DEFAULT_KEY_PATH"
   )
@@ -954,7 +1096,7 @@ restore_latest_backup() {
   fi
   validate_backup_tls_files "$LATEST_BACKUP_DIR" "$backup_config"
 
-  systemctl stop sing-box >/dev/null 2>&1 || true
+  service_stop
   disable_hy2_port_hopping
   for destination in "${destinations[@]}"; do
     rm -f "$destination"
@@ -967,6 +1109,12 @@ restore_latest_backup() {
   if [[ -f "$PORT_HELPER" ]]; then
     chmod +x "$PORT_HELPER"
   fi
+  if [[ "$SERVICE_MANAGER" == "openrc" && -f "$OPENRC_PORT_SERVICE" ]]; then
+    chmod +x "$OPENRC_PORT_SERVICE"
+    rc-update add sing-box-hy2-port-hopping default >/dev/null 2>&1 || true
+    rc-service sing-box-hy2-port-hopping restart >/dev/null 2>&1 \
+      || rc-service sing-box-hy2-port-hopping start
+  fi
 
   if ! sing-box check -c "$SERVER_CONF"; then
     echo "错误：文件已恢复，但未通过 sing-box 配置验证"
@@ -974,9 +1122,9 @@ restore_latest_backup() {
     exit 1
   fi
 
-  systemctl daemon-reload
-  systemctl enable sing-box
-  systemctl restart sing-box
+  service_reload
+  service_enable
+  service_restart
 
   echo
   echo "备份恢复完成。"
@@ -994,9 +1142,9 @@ reuse_existing_config() {
   install_dependencies
 
   sing-box check -c "$SERVER_CONF"
-  systemctl daemon-reload
-  systemctl enable sing-box
-  systemctl restart sing-box
+  service_reload
+  service_enable
+  service_restart
 
   echo
   echo "重新安装完成，现有配置和凭据已保留。"
@@ -1075,8 +1223,7 @@ uninstall_selected() {
   if [[ -s "$SERVER_CONF" ]]; then
     if ! command -v jq >/dev/null 2>&1; then
       echo "正在安装 jq，以安全编辑 JSON 配置……"
-      apt update
-      apt install -y jq
+      install_jq
     fi
 
     if ! jq -e . "$SERVER_CONF" >/dev/null; then
@@ -1116,7 +1263,7 @@ uninstall_selected() {
         sing-box check -c "$temp_config"
         install -m 600 "$temp_config" "$SERVER_CONF"
       else
-        systemctl disable --now sing-box >/dev/null 2>&1 || true
+        service_disable
         rm -f "$SERVER_CONF"
       fi
       rm -f "$temp_config"
@@ -1136,11 +1283,11 @@ uninstall_selected() {
   fi
   rm -f "$COMBINED_INFO"
 
-  systemctl daemon-reload
+  service_reload
 
   if (( matched > 0 && remaining > 0 )); then
-    systemctl enable sing-box
-    systemctl restart sing-box
+    service_enable
+    service_restart
   fi
 
   if (( PURGE_SING_BOX )); then
@@ -1150,8 +1297,8 @@ uninstall_selected() {
       echo "配置备份：$backup_status"
       exit 1
     fi
-    systemctl disable --now sing-box >/dev/null 2>&1 || true
-    apt purge -y sing-box
+    service_disable
+    purge_sing_box_package
   fi
 
   echo
@@ -1192,6 +1339,8 @@ prepare_inputs() {
   fi
 
   if (( INSTALL_HY2 )); then
+    [[ "$OBFS" == "on" ]] && OBFS="gecko"
+
     if [[ -z "$HY2_SNI" || "$HY2_SNI" =~ [[:space:]] ]]; then
       echo "错误：Hysteria2 SNI 不能为空或包含空白字符"
       exit 1
@@ -1225,9 +1374,18 @@ prepare_inputs() {
       exit 1
     fi
 
-    if [[ "$OBFS" != "on" && "$OBFS" != "off" ]]; then
-      echo "错误：OBFS 只能设置为 on 或 off"
+    if [[ "$OBFS" != "gecko" && "$OBFS" != "salamander" && "$OBFS" != "off" ]]; then
+      echo "错误：OBFS 只能设置为 gecko、salamander 或 off"
       exit 1
+    fi
+
+    if [[ "$OBFS" == "gecko" ]]; then
+      if ! validate_positive_number "$GECKO_MIN_PACKET_SIZE" \
+        || ! validate_positive_number "$GECKO_MAX_PACKET_SIZE" \
+        || (( GECKO_MIN_PACKET_SIZE > GECKO_MAX_PACKET_SIZE )); then
+        echo "错误：Gecko 包长必须是正整数，且最小值不能大于最大值"
+        exit 1
+      fi
     fi
 
     if ! validate_proxy_name; then
@@ -1244,10 +1402,26 @@ prepare_inputs() {
 }
 
 install_dependencies() {
+  local releases alpha_version
+
   echo "正在安装依赖……"
-  apt update
-  apt install -y curl openssl ca-certificates iproute2 coreutils jq nftables iptables
-  curl -fsSL https://sing-box.app/install.sh | sh
+  if [[ "$PLATFORM" == "alpine" ]]; then
+    apk add --no-cache bash curl openssl ca-certificates iproute2 coreutils jq nftables iptables openrc
+  else
+    apt update
+    apt install -y curl openssl ca-certificates iproute2 coreutils jq nftables iptables
+  fi
+  releases="$(curl -fsSL 'https://api.github.com/repos/SagerNet/sing-box/releases?per_page=100')"
+  alpha_version="$(printf '%s' "$releases" | jq -r '
+    [.[].tag_name | select(test("^v?[0-9]+\\.[0-9]+\\.[0-9]+-alpha\\.[0-9]+$"))][0] // empty
+  ')"
+  if [[ -z "$alpha_version" ]]; then
+    echo "错误：获取 sing-box 最新 alpha 版本失败"
+    exit 1
+  fi
+  echo "正在安装 sing-box ${alpha_version}……"
+  curl -fsSL https://sing-box.app/install.sh \
+    | sh -s -- --version "${alpha_version#v}"
   mkdir -p /etc/sing-box
 }
 
@@ -1267,7 +1441,7 @@ generate_anytls_secrets() {
 }
 
 generate_hy2_secrets() {
-  if [[ "$OBFS" == "on" && -z "$OBFS_PASSWORD" ]]; then
+  if [[ "$OBFS" != "off" && -z "$OBFS_PASSWORD" ]]; then
     OBFS_PASSWORD="$(openssl rand -hex 16)"
   fi
 
@@ -1429,6 +1603,14 @@ SURGE
 }
 
 write_info_files() {
+  local port_service_config
+
+  if [[ "$SERVICE_MANAGER" == "systemd" ]]; then
+    port_service_config="$SYSTEMD_DROPIN"
+  else
+    port_service_config="$OPENRC_PORT_SERVICE"
+  fi
+
   cat > "$COMBINED_INFO" << TXT
 sbox-reality 统一安装完成
 
@@ -1480,7 +1662,7 @@ Hysteria2 + Surge 端口跳跃安装完成
   跳跃间隔：${HOP_INTERVAL} 秒
   辅助脚本：$PORT_HELPER
   环境文件：$PORT_ENV
-  systemd 配置：$SYSTEMD_DROPIN
+  服务配置：$port_service_config
 
 客户端文件：
   sing-box 出站配置：$HY2_CLIENT_OUT
@@ -1500,10 +1682,16 @@ Hysteria2 + Surge 端口跳跃安装完成
   跳过证书验证：true
 TXT
 
-    if [[ "$OBFS" == "on" ]]; then
+    if [[ "$OBFS" != "off" ]]; then
       cat >> "$HY2_INFO" << TXT
-  Salamander 密码：$OBFS_PASSWORD
+  混淆类型：$OBFS
+  混淆密码：$OBFS_PASSWORD
 TXT
+      if [[ "$OBFS" == "gecko" ]]; then
+        cat >> "$HY2_INFO" << TXT
+  Gecko 包长：${GECKO_MIN_PACKET_SIZE}-${GECKO_MAX_PACKET_SIZE}
+TXT
+      fi
     fi
 
     cat >> "$HY2_INFO" << TXT
@@ -1516,12 +1704,21 @@ TXT
     printf '\n' >> "$COMBINED_INFO"
   fi
 
-  cat >> "$COMBINED_INFO" << TXT
+  if [[ "$SERVICE_MANAGER" == "systemd" ]]; then
+    cat >> "$COMBINED_INFO" << TXT
 常用命令：
   systemctl status sing-box --no-pager
   journalctl -u sing-box -f
   systemctl restart sing-box
 TXT
+  else
+    cat >> "$COMBINED_INFO" << TXT
+常用命令：
+  rc-service sing-box status
+  rc-service sing-box restart
+  tail -f /var/log/messages
+TXT
+  fi
 
   if (( INSTALL_HY2 )); then
     cat >> "$COMBINED_INFO" << TXT
@@ -1570,10 +1767,7 @@ main() {
     exit 1
   fi
 
-  if ! command -v apt >/dev/null 2>&1; then
-    echo "错误：本脚本仅支持使用 apt 的 Debian/Ubuntu 系统"
-    exit 1
-  fi
+  detect_platform
 
   if [[ "$ACTION" == "uninstall" ]]; then
     uninstall_selected
@@ -1617,6 +1811,7 @@ main() {
     echo "  Hysteria2 端口：$HY2_PORT ($HY2_PORT_MODE)"
     echo "  Hysteria2 跳跃端口：$NORMALIZED_HOP_PORTS"
     echo "  Hysteria2 跳跃间隔：${HOP_INTERVAL} 秒"
+    echo "  Hysteria2 混淆：$OBFS"
   fi
   echo
 
@@ -1646,9 +1841,9 @@ main() {
   fi
 
   sing-box check -c "$SERVER_CONF"
-  systemctl daemon-reload
-  systemctl enable sing-box
-  systemctl restart sing-box
+  service_reload
+  service_enable
+  service_restart
 
   write_info_files
   print_summary
