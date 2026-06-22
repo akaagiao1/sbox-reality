@@ -595,17 +595,23 @@ JSON
   fi
 }
 
+surge_obfs_param() {
+  if [[ "$OBFS" == "gecko" ]]; then
+    printf ',gecko-password="%s"' "$OBFS_PASSWORD"
+  elif [[ "$OBFS" == "salamander" ]]; then
+    printf ',salamander-password="%s"' "$OBFS_PASSWORD"
+  fi
+}
+
 surge_extra_params() {
   local extra=""
 
-  if [[ -n "$DOWN_MBPS" ]]; then
-    extra="${extra}, download-bandwidth=${DOWN_MBPS}"
+  if [[ "$HOP_INTERVAL" != "30" ]]; then
+    extra="${extra},port-hopping-interval=${HOP_INTERVAL}"
   fi
 
-  if [[ "$OBFS" == "gecko" ]]; then
-    extra="${extra}, gecko-password=${OBFS_PASSWORD}"
-  elif [[ "$OBFS" == "salamander" ]]; then
-    extra="${extra}, salamander-password=${OBFS_PASSWORD}"
+  if [[ -n "$DOWN_MBPS" ]]; then
+    extra="${extra},download-bandwidth=${DOWN_MBPS}"
   fi
 
   printf '%s' "$extra"
@@ -1593,10 +1599,10 @@ JSON
 
   cat > "$SURGE_CONF" << SURGE
 [Proxy]
-${PROXY_NAME} = hysteria2, ${SERVER_IP}, ${HY2_PORT}, password=${HY2_PASSWORD}, skip-cert-verify=true, sni=${HY2_SNI}, port-hopping="${NORMALIZED_HOP_PORTS}", port-hopping-interval=${HOP_INTERVAL}$(surge_extra_params)
+${PROXY_NAME}=hysteria2,${SERVER_IP},${HY2_PORT},password="${HY2_PASSWORD}",port-hopping="${NORMALIZED_HOP_PORTS}"$(surge_obfs_param),sni="${HY2_SNI}",skip-cert-verify=true,tfo=false$(surge_extra_params)
 
 [Proxy Group]
-Proxy = select, ${PROXY_NAME}, DIRECT
+Proxy=select,${PROXY_NAME},DIRECT
 SURGE
 
   printf '%s\n' "$HY2_SHARE_URL" > "$HY2_URL_FILE"

@@ -218,10 +218,10 @@ Surge 片段示例：
 
 ```ini
 [Proxy]
-HY2 = hysteria2, 你的VPS_IP, 20000, password=自动生成, skip-cert-verify=true, sni=www.bing.com, port-hopping="20000-50000", port-hopping-interval=30, gecko-password=自动生成
+HY2=hysteria2,你的VPS_IP,20000,password="自动生成",port-hopping="20000-50000",gecko-password="自动生成",sni="www.bing.com",skip-cert-verify=true,tfo=false
 
 [Proxy Group]
-Proxy = select, HY2, DIRECT
+Proxy=select,HY2,DIRECT
 ```
 
 脚本会为 sing-box 创建 Hysteria2 入站，并通过 nftables 或 iptables 给 UDP 跳跃端口做本机重定向。VPS 防火墙或云厂商安全组需要放行脚本输出的 UDP 跳跃端口范围；如果本机防火墙按重定向后的端口过滤，也要放行 sing-box 实际监听端口。
