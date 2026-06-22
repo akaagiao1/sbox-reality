@@ -363,6 +363,8 @@ Surge 配置片段：/root/surge-hysteria2.conf
 端口跳跃 OpenRC 服务（Alpine）：/etc/init.d/sing-box-hy2-port-hopping
 ```
 
+`/root/hysteria2-surge-info.txt` 中会同时保存可直接复制到 Surge 的完整 `HY2=hysteria2,...` 代理配置。
+
 查看客户端 `outbounds`：
 
 ```bash

@@ -60,6 +60,7 @@ ANYTLS_PASSWORD=""
 ANYTLS_SHORT_ID=""
 HY2_PASSWORD=""
 HY2_SHARE_URL=""
+SURGE_PROXY_LINE=""
 LAST_BACKUP_DIR=""
 LATEST_BACKUP_DIR=""
 PLATFORM=""
@@ -615,6 +616,12 @@ surge_extra_params() {
   fi
 
   printf '%s' "$extra"
+}
+
+build_surge_proxy_line() {
+  printf '%s=hysteria2,%s,%s,password="%s",port-hopping="%s"%s,sni="%s",skip-cert-verify=true,tfo=false%s' \
+    "$PROXY_NAME" "$SERVER_IP" "$HY2_PORT" "$HY2_PASSWORD" \
+    "$NORMALIZED_HOP_PORTS" "$(surge_obfs_param)" "$HY2_SNI" "$(surge_extra_params)"
 }
 
 url_encode() {
@@ -1407,8 +1414,34 @@ prepare_inputs() {
   fi
 }
 
+fetch_latest_alpha_version() {
+  local url payload version
+  local -a sources=(
+    "https://api.github.com/repos/SagerNet/sing-box/releases?per_page=30"
+    "https://api.github.com/repos/SagerNet/sing-box/tags?per_page=100"
+    "https://data.jsdelivr.com/v1/package/gh/SagerNet/sing-box"
+  )
+
+  for url in "${sources[@]}"; do
+    if payload="$(curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors \
+      --connect-timeout 10 --max-time 60 "$url")"; then
+      version="$(printf '%s' "$payload" | jq -r '
+        .. | strings
+        | select(test("^v?[0-9]+\\.[0-9]+\\.[0-9]+-alpha\\.[0-9]+$"))
+      ' | sed 's/^v//' | sort -V | tail -n 1)"
+      if [[ -n "$version" ]]; then
+        printf '%s' "$version"
+        return 0
+      fi
+    fi
+    echo "警告：版本源暂时不可用，正在尝试备用源：$url" >&2
+  done
+
+  return 1
+}
+
 install_dependencies() {
-  local releases alpha_version
+  local alpha_version attempt installed=0
 
   echo "正在安装依赖……"
   if [[ "$PLATFORM" == "alpine" ]]; then
@@ -1417,17 +1450,27 @@ install_dependencies() {
     apt update
     apt install -y curl openssl ca-certificates iproute2 coreutils jq nftables iptables
   fi
-  releases="$(curl -fsSL 'https://api.github.com/repos/SagerNet/sing-box/releases?per_page=100')"
-  alpha_version="$(printf '%s' "$releases" | jq -r '
-    [.[].tag_name | select(test("^v?[0-9]+\\.[0-9]+\\.[0-9]+-alpha\\.[0-9]+$"))][0] // empty
-  ')"
-  if [[ -z "$alpha_version" ]]; then
+  if ! alpha_version="$(fetch_latest_alpha_version)"; then
     echo "错误：获取 sing-box 最新 alpha 版本失败"
     exit 1
   fi
-  echo "正在安装 sing-box ${alpha_version}……"
-  curl -fsSL https://sing-box.app/install.sh \
-    | sh -s -- --version "${alpha_version#v}"
+  echo "正在安装 sing-box v${alpha_version}……"
+  for attempt in 1 2 3; do
+    if curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors \
+      --connect-timeout 10 --max-time 60 https://sing-box.app/install.sh \
+      | sh -s -- --version "$alpha_version"; then
+      installed=1
+      break
+    fi
+    if (( attempt < 3 )); then
+      echo "警告：sing-box 下载失败，正在进行第 $(( attempt + 1 )) 次尝试……" >&2
+      sleep 3
+    fi
+  done
+  if (( ! installed )) || ! command -v sing-box >/dev/null 2>&1; then
+    echo "错误：sing-box v${alpha_version} 安装失败，请稍后重试"
+    exit 1
+  fi
   mkdir -p /etc/sing-box
 }
 
@@ -1576,6 +1619,7 @@ JSON
 
 write_hy2_clients() {
   build_hy2_share_url
+  SURGE_PROXY_LINE="$(build_surge_proxy_line)"
 
   cat > "$HY2_CLIENT_OUT" << JSON
 {
@@ -1599,7 +1643,7 @@ JSON
 
   cat > "$SURGE_CONF" << SURGE
 [Proxy]
-${PROXY_NAME}=hysteria2,${SERVER_IP},${HY2_PORT},password="${HY2_PASSWORD}",port-hopping="${NORMALIZED_HOP_PORTS}"$(surge_obfs_param),sni="${HY2_SNI}",skip-cert-verify=true,tfo=false$(surge_extra_params)
+$SURGE_PROXY_LINE
 
 [Proxy Group]
 Proxy=select,${PROXY_NAME},DIRECT
@@ -1677,6 +1721,9 @@ Hysteria2 + Surge 端口跳跃安装完成
 
 客户端链接：
   $HY2_SHARE_URL
+
+Surge 代理配置：
+$SURGE_PROXY_LINE
 
 客户端参数：
   服务器：$SERVER_IP
