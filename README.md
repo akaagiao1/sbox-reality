@@ -24,11 +24,11 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 不带参数运行时会出现菜单：
 
 ```text
-1) AnyTLS + REALITY
-2) Hysteria2 + Surge port hopping
-3) Install both
-4) Uninstall
-5) Restore latest backup
+1) 安装 AnyTLS + REALITY
+2) 安装 Hysteria2 + Surge 端口跳跃
+3) 同时安装两者
+4) 卸载
+5) 恢复最新备份
 ```
 
 也可以直接指定安装模式：

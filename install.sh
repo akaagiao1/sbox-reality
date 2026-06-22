@@ -62,7 +62,7 @@ LATEST_BACKUP_DIR=""
 
 usage() {
   cat << USAGE
-Usage:
+用法：
   bash $0
   bash $0 --mode 1
   bash $0 --mode 2
@@ -70,46 +70,46 @@ Usage:
   bash $0 --restore
   bash $0 --uninstall anytls|hy2|all
 
-Install modes:
-  1, anytls     Install AnyTLS + REALITY
-  2, hy2        Install Hysteria2 + Surge port hopping
-  3, both       Install both in the same sing-box config
-  4, uninstall  Uninstall one or both configurations
-  5, restore    Restore the latest configuration backup
+安装模式：
+  1, anytls     安装 AnyTLS + REALITY
+  2, hy2        安装 Hysteria2 + Surge 端口跳跃
+  3, both       在同一份 sing-box 配置中安装两者
+  4, uninstall  卸载一个或全部配置
+  5, restore    恢复最新的配置备份
 
-Reinstall options (shown when an existing config is found):
-      --config keep    Keep the existing server/client config and only update sing-box
-      --config restore Restore the latest config from /root/sbox-reality-backups
-      --config new     Back up the existing config and generate a new one
+重新安装选项（检测到现有配置时显示）：
+      --config keep    保留现有服务端/客户端配置，仅更新 sing-box
+      --config restore 从 /root/sbox-reality-backups 恢复最新配置
+      --config new     备份现有配置并生成新配置
 
-Uninstall options:
-      --uninstall      Uninstall scope: anytls, hy2, or all
-      --purge          Also remove the sing-box package (only with --uninstall all)
-  -y, --yes            Skip uninstall confirmation
+卸载选项：
+      --uninstall      卸载范围：anytls、hy2 或 all
+      --purge          同时移除 sing-box 软件包（仅适用于 --uninstall all）
+  -y, --yes            跳过卸载确认
 
-AnyTLS + REALITY options:
-  -d, --domain        REALITY handshake domain, default: www.apple.com
-      --anytls-port   AnyTLS TCP listen port, default: auto
+AnyTLS + REALITY 选项：
+  -d, --domain        REALITY 握手域名，默认：www.apple.com
+      --anytls-port   AnyTLS TCP 监听端口，默认：自动选择
 
-Hysteria2 + Surge options:
-  -s, --sni           TLS SNI and self-signed certificate common name, default: www.bing.com
-      --hy2-port      Hysteria2 UDP listen port, default: auto
-  -P, --ports         Surge port-hopping ports/ranges, default: 20000-50000
-  -i, --interval      Port hopping interval in seconds, minimum 5, default: 30
-      --up            Server upload bandwidth in Mbps, optional
-      --down          Server download bandwidth in Mbps, optional
-      --obfs          Enable Hysteria2 Salamander obfuscation
-      --obfs-password Salamander obfuscation password
-      --cert          Existing TLS certificate path
-      --key           Existing TLS key path
-      --name          Surge proxy name, default: HY2
+Hysteria2 + Surge 选项：
+  -s, --sni           TLS SNI 和自签证书通用名称，默认：www.bing.com
+      --hy2-port      Hysteria2 UDP 监听端口，默认：自动选择
+  -P, --ports         Surge 端口跳跃端口/范围，默认：20000-50000
+  -i, --interval      端口跳跃间隔（秒），最小 5，默认：30
+      --up            服务端上传带宽（Mbps），可选
+      --down          服务端下载带宽（Mbps），可选
+      --obfs          启用 Hysteria2 Salamander 混淆
+      --obfs-password Salamander 混淆密码
+      --cert          现有 TLS 证书路径
+      --key           现有 TLS 私钥路径
+      --name          Surge 代理名称，默认：HY2
 
-Shared:
-  -m, --mode          Mode: 1-5, anytls, hy2, both, uninstall, restore
-  -p, --port          Port for mode 1 or mode 2. Use --anytls-port and --hy2-port for both mode
-  -h, --help          Show help
+通用选项：
+  -m, --mode          模式：1-5、anytls、hy2、both、uninstall、restore
+  -p, --port          模式 1 或 2 的端口；同时安装时请分别使用 --anytls-port 和 --hy2-port
+  -h, --help          显示帮助
 
-Environment variables:
+环境变量：
   INSTALL_MODE, CONFIG_POLICY, UNINSTALL_SCOPE, PORT,
   REALITY_DOMAIN, DOMAIN, ANYTLS_PORT,
   HIGH_PORT_MIN, HIGH_PORT_MAX,
@@ -240,7 +240,7 @@ while [[ $# -gt 0 ]]; do
       exit 0
       ;;
     *)
-      echo "Unknown option: $1"
+      echo "未知选项：$1"
       usage
       exit 1
       ;;
@@ -253,17 +253,17 @@ choose_mode() {
   fi
 
   if [[ -t 0 ]]; then
-    echo "Choose an operation:"
-    echo "  1) AnyTLS + REALITY"
-    echo "  2) Hysteria2 + Surge port hopping"
-    echo "  3) Install both"
-    echo "  4) Uninstall"
-    echo "  5) Restore latest backup"
+    echo "请选择操作："
+    echo "  1) 安装 AnyTLS + REALITY"
+    echo "  2) 安装 Hysteria2 + Surge 端口跳跃"
+    echo "  3) 同时安装两者"
+    echo "  4) 卸载"
+    echo "  5) 恢复最新备份"
     echo
-    read -rp "Select [1-5]: " INSTALL_MODE
+    read -rp "请输入选项 [1-5]：" INSTALL_MODE
   else
-    echo "Error: install mode is required in non-interactive mode"
-    echo "Example: bash $0 --mode both"
+    echo "错误：非交互模式下必须指定安装模式"
+    echo "示例：bash $0 --mode both"
     exit 1
   fi
 }
@@ -292,7 +292,7 @@ normalize_mode() {
       CONFIG_POLICY="restore"
       ;;
     *)
-      echo "Error: invalid install mode: $INSTALL_MODE"
+      echo "错误：无效的安装模式：$INSTALL_MODE"
       usage
       exit 1
       ;;
@@ -304,15 +304,15 @@ choose_uninstall_scope() {
 
   if [[ -z "$UNINSTALL_SCOPE" ]]; then
     if [[ -t 0 ]]; then
-      echo "Choose uninstall scope:"
-      echo "  1) AnyTLS + REALITY only"
-      echo "  2) Hysteria2 + port hopping only"
-      echo "  3) Both configurations"
+      echo "请选择卸载范围："
+      echo "  1) 仅 AnyTLS + REALITY"
+      echo "  2) 仅 Hysteria2 + 端口跳跃"
+      echo "  3) 两项配置全部卸载"
       echo
-      read -rp "Select [1-3]: " UNINSTALL_SCOPE
+      read -rp "请输入选项 [1-3]：" UNINSTALL_SCOPE
     else
-      echo "Error: uninstall scope is required in non-interactive mode"
-      echo "Example: bash $0 --uninstall all --yes"
+      echo "错误：非交互模式下必须指定卸载范围"
+      echo "示例：bash $0 --uninstall all --yes"
       exit 1
     fi
   fi
@@ -328,13 +328,13 @@ choose_uninstall_scope() {
       UNINSTALL_SCOPE="all"
       ;;
     *)
-      echo "Error: invalid uninstall scope: $UNINSTALL_SCOPE"
+      echo "错误：无效的卸载范围：$UNINSTALL_SCOPE"
       exit 1
       ;;
   esac
 
   if (( PURGE_SING_BOX )) && [[ "$UNINSTALL_SCOPE" != "all" ]]; then
-    echo "Error: --purge can only be used with --uninstall all"
+    echo "错误：--purge 只能与 --uninstall all 一起使用"
     exit 1
   fi
 }
@@ -397,7 +397,7 @@ pick_random_free_high_tcp_port() {
   local range=$(( HIGH_PORT_MAX - HIGH_PORT_MIN + 1 ))
 
   if (( HIGH_PORT_MIN < 1024 || HIGH_PORT_MIN > HIGH_PORT_MAX || HIGH_PORT_MAX > 65535 )); then
-    echo "Error: invalid high port range: ${HIGH_PORT_MIN}-${HIGH_PORT_MAX}" >&2
+    echo "错误：无效的高端口范围：${HIGH_PORT_MIN}-${HIGH_PORT_MAX}" >&2
     exit 1
   fi
 
@@ -409,7 +409,7 @@ pick_random_free_high_tcp_port() {
     fi
   done
 
-  echo "Error: failed to find a free high TCP port in ${HIGH_PORT_MIN}-${HIGH_PORT_MAX}" >&2
+  echo "错误：在 ${HIGH_PORT_MIN}-${HIGH_PORT_MAX} 范围内未找到可用的 TCP 高端口" >&2
   exit 1
 }
 
@@ -421,7 +421,7 @@ normalize_hop_ports() {
   raw="${raw//,/;}"
 
   if [[ -z "$raw" ]]; then
-    echo "Error: Hysteria2 ports cannot be empty"
+    echo "错误：Hysteria2 端口不能为空"
     exit 1
   fi
 
@@ -432,7 +432,7 @@ normalize_hop_ports() {
 
   for spec in "${specs[@]}"; do
     if [[ -z "$spec" ]]; then
-      echo "Error: invalid empty port item in: $HOP_PORTS"
+      echo "错误：端口列表中存在空项：$HOP_PORTS"
       exit 1
     fi
 
@@ -440,14 +440,14 @@ normalize_hop_ports() {
       start="${BASH_REMATCH[1]}"
       end="${BASH_REMATCH[2]}"
       if ! validate_port "$start" || ! validate_port "$end" || (( start > end )); then
-        echo "Error: invalid port range: $spec"
+        echo "错误：无效的端口范围：$spec"
         exit 1
       fi
       [[ -z "$first" ]] && first="$start"
     elif validate_port "$spec"; then
       [[ -z "$first" ]] && first="$spec"
     else
-      echo "Error: invalid port item: $spec"
+      echo "错误：无效的端口：$spec"
       exit 1
     fi
 
@@ -549,7 +549,7 @@ prepare_certificate() {
 
   if [[ "$CERT_PATH" != "$DEFAULT_CERT_PATH" || "$KEY_PATH" != "$DEFAULT_KEY_PATH" ]]; then
     if [[ ! -f "$CERT_PATH" || ! -f "$KEY_PATH" ]]; then
-      echo "Error: custom --cert and --key must both exist"
+      echo "错误：自定义的 --cert 和 --key 文件必须同时存在"
       exit 1
     fi
     return 0
@@ -674,7 +674,7 @@ case "${1:-}" in
     clean_iptables
     ;;
   *)
-    echo "Usage: $0 apply|clean" >&2
+    echo "用法：$0 apply|clean" >&2
     exit 1
     ;;
 esac
@@ -731,12 +731,12 @@ backup_existing_files() {
   if (( copied == 0 )); then
     rmdir "$backup_dir" 2>/dev/null || true
     LAST_BACKUP_DIR=""
-    echo "No existing configuration files were found; no empty backup was created."
+    echo "未发现现有配置文件，因此没有创建空备份。"
     return 0
   fi
 
   LAST_BACKUP_DIR="$backup_dir"
-  echo "Previous configuration backed up to: $backup_dir"
+  echo "原配置已备份至：$backup_dir"
 }
 
 prune_backups_except() {
@@ -779,7 +779,7 @@ choose_config_policy() {
     ask|""|keep|restore|new)
       ;;
     *)
-      echo "Error: --config must be keep, restore, or new"
+      echo "错误：--config 必须设置为 keep、restore 或 new"
       exit 1
       ;;
   esac
@@ -788,13 +788,13 @@ choose_config_policy() {
 
   if [[ ! -s "$SERVER_CONF" ]]; then
     if [[ "$CONFIG_POLICY" == "keep" ]]; then
-      echo "Error: --config keep was requested, but $SERVER_CONF does not exist"
+      echo "错误：指定了 --config keep，但 $SERVER_CONF 不存在"
       exit 1
     fi
 
     if [[ "$CONFIG_POLICY" == "restore" ]]; then
       if [[ -z "$LATEST_BACKUP_DIR" ]]; then
-        echo "Error: no restorable configuration was found in $BACKUP_ROOT"
+        echo "错误：在 $BACKUP_ROOT 中未找到可恢复的配置"
         exit 1
       fi
       return 0
@@ -803,24 +803,24 @@ choose_config_policy() {
     if [[ -n "$LATEST_BACKUP_DIR" && ( "$CONFIG_POLICY" == "ask" || -z "$CONFIG_POLICY" ) ]]; then
       if [[ -t 0 ]]; then
         echo
-        echo "A previous configuration backup was found:"
+        echo "发现以前的配置备份："
         echo "  $LATEST_BACKUP_DIR"
-        echo "  1) Restore this backup"
-        echo "  2) Ignore it and generate a new configuration"
-        echo "  3) Cancel"
+        echo "  1) 恢复此备份"
+        echo "  2) 忽略备份并生成新配置"
+        echo "  3) 取消"
         echo
-        read -rp "Select [1-3]: " CONFIG_POLICY
+        read -rp "请输入选项 [1-3]：" CONFIG_POLICY
         case "$CONFIG_POLICY" in
           1) CONFIG_POLICY="restore" ;;
           2) CONFIG_POLICY="new" ;;
-          3) echo "Cancelled"; exit 0 ;;
-          *) echo "Error: invalid selection"; exit 1 ;;
+          3) echo "已取消"; exit 0 ;;
+          *) echo "错误：无效选项"; exit 1 ;;
         esac
         return 0
       fi
 
-      echo "Error: a previous configuration backup was found: $LATEST_BACKUP_DIR"
-      echo "Use --config restore to restore it, or --config new to ignore it"
+      echo "错误：发现以前的配置备份：$LATEST_BACKUP_DIR"
+      echo "请使用 --config restore 恢复，或使用 --config new 忽略备份"
       exit 1
     fi
 
@@ -831,7 +831,7 @@ choose_config_policy() {
   case "$CONFIG_POLICY" in
     keep|new|restore)
       if [[ "$CONFIG_POLICY" == "restore" && -z "$LATEST_BACKUP_DIR" ]]; then
-        echo "Error: no restorable configuration was found in $BACKUP_ROOT"
+        echo "错误：在 $BACKUP_ROOT 中未找到可恢复的配置"
         exit 1
       fi
       return 0
@@ -842,37 +842,37 @@ choose_config_policy() {
 
   if [[ -t 0 ]]; then
     echo
-    echo "Existing sing-box configuration found: $SERVER_CONF"
-    echo "  1) Keep and reuse the existing configuration"
-    echo "  2) Back it up and generate a new configuration"
+    echo "发现现有 sing-box 配置：$SERVER_CONF"
+    echo "  1) 保留并继续使用现有配置"
+    echo "  2) 备份现有配置并生成新配置"
     if [[ -n "$LATEST_BACKUP_DIR" ]]; then
-      echo "  3) Restore the latest backup: $LATEST_BACKUP_DIR"
-      echo "  4) Cancel"
+      echo "  3) 恢复最新备份：$LATEST_BACKUP_DIR"
+      echo "  4) 取消"
     else
-      echo "  3) Cancel"
+      echo "  3) 取消"
     fi
     echo
     if [[ -n "$LATEST_BACKUP_DIR" ]]; then
-      read -rp "Select [1-4]: " CONFIG_POLICY
+      read -rp "请输入选项 [1-4]：" CONFIG_POLICY
       case "$CONFIG_POLICY" in
         1) CONFIG_POLICY="keep" ;;
         2) CONFIG_POLICY="new" ;;
         3) CONFIG_POLICY="restore" ;;
-        4) echo "Cancelled"; exit 0 ;;
-        *) echo "Error: invalid selection"; exit 1 ;;
+        4) echo "已取消"; exit 0 ;;
+        *) echo "错误：无效选项"; exit 1 ;;
       esac
     else
-      read -rp "Select [1-3]: " CONFIG_POLICY
+      read -rp "请输入选项 [1-3]：" CONFIG_POLICY
       case "$CONFIG_POLICY" in
         1) CONFIG_POLICY="keep" ;;
         2) CONFIG_POLICY="new" ;;
-        3) echo "Cancelled"; exit 0 ;;
-        *) echo "Error: invalid selection"; exit 1 ;;
+        3) echo "已取消"; exit 0 ;;
+        *) echo "错误：无效选项"; exit 1 ;;
       esac
     fi
   else
-    echo "Error: an existing configuration was found"
-    echo "Use --config keep, --config restore, or --config new"
+    echo "错误：发现现有配置"
+    echo "请使用 --config keep、--config restore 或 --config new"
     exit 1
   fi
 }
@@ -898,11 +898,11 @@ validate_backup_tls_files() {
 
     if [[ "$required_path" == "$DEFAULT_CERT_PATH" || "$required_path" == "$DEFAULT_KEY_PATH" ]]; then
       if [[ ! -f "$backup_file" ]]; then
-        echo "Error: backup is incomplete; missing $(basename "$required_path")"
+        echo "错误：备份不完整，缺少 $(basename "$required_path")"
         exit 1
       fi
     elif [[ ! -f "$required_path" ]]; then
-      echo "Error: custom TLS file required by the backup does not exist: $required_path"
+      echo "错误：备份所需的自定义 TLS 文件不存在：$required_path"
       exit 1
     fi
   done < <(
@@ -935,7 +935,7 @@ restore_latest_backup() {
   local destination
 
   [[ -n "$LATEST_BACKUP_DIR" ]] || {
-    echo "Error: no restorable configuration was found in $BACKUP_ROOT"
+    echo "错误：在 $BACKUP_ROOT 中未找到可恢复的配置"
     exit 1
   }
   backup_config="${LATEST_BACKUP_DIR}/$(basename "$SERVER_CONF")"
@@ -944,12 +944,12 @@ restore_latest_backup() {
     backup_existing_files "before-restore"
   fi
 
-  echo "Restoring configuration from: $LATEST_BACKUP_DIR"
-  echo "The selected install mode and new protocol options will not be applied."
+  echo "正在从以下位置恢复配置：$LATEST_BACKUP_DIR"
+  echo "所选安装模式和新协议选项不会生效。"
   install_dependencies
 
   if ! jq -e . "$backup_config" >/dev/null; then
-    echo "Error: backup config is not valid JSON: $backup_config"
+    echo "错误：备份配置不是有效的 JSON：$backup_config"
     exit 1
   fi
   validate_backup_tls_files "$LATEST_BACKUP_DIR" "$backup_config"
@@ -969,8 +969,8 @@ restore_latest_backup() {
   fi
 
   if ! sing-box check -c "$SERVER_CONF"; then
-    echo "Error: restored files are in place, but sing-box validation failed"
-    echo "The service was left stopped. Backup: $LATEST_BACKUP_DIR"
+    echo "错误：文件已恢复，但未通过 sing-box 配置验证"
+    echo "服务已保持停止状态。备份位置：$LATEST_BACKUP_DIR"
     exit 1
   fi
 
@@ -979,9 +979,9 @@ restore_latest_backup() {
   systemctl restart sing-box
 
   echo
-  echo "Backup restore complete."
-  echo "  restored_from: $LATEST_BACKUP_DIR"
-  echo "  config: $SERVER_CONF"
+  echo "备份恢复完成。"
+  echo "  恢复来源：$LATEST_BACKUP_DIR"
+  echo "  配置文件：$SERVER_CONF"
   if [[ -f "$COMBINED_INFO" ]]; then
     echo
     cat "$COMBINED_INFO"
@@ -990,7 +990,7 @@ restore_latest_backup() {
 
 reuse_existing_config() {
   backup_existing_files "reinstall-keep"
-  echo "Keeping the existing configuration; new mode and protocol options will not be applied."
+  echo "保留现有配置；新模式和协议选项不会生效。"
   install_dependencies
 
   sing-box check -c "$SERVER_CONF"
@@ -999,9 +999,9 @@ reuse_existing_config() {
   systemctl restart sing-box
 
   echo
-  echo "Reinstall complete. The existing configuration and credentials were kept."
-  echo "  config: $SERVER_CONF"
-  echo "  backup: $LAST_BACKUP_DIR"
+  echo "重新安装完成，现有配置和凭据已保留。"
+  echo "  配置文件：$SERVER_CONF"
+  echo "  备份位置：$LAST_BACKUP_DIR"
 
   if [[ -f "$COMBINED_INFO" ]]; then
     echo
@@ -1013,21 +1013,21 @@ confirm_uninstall() {
   (( ASSUME_YES )) && return 0
 
   if [[ ! -t 0 ]]; then
-    echo "Error: uninstall confirmation is required; use --yes in non-interactive mode"
+    echo "错误：卸载操作需要确认；非交互模式请使用 --yes"
     exit 1
   fi
 
   echo
-  echo "Uninstall scope: $UNINSTALL_SCOPE"
+  echo "卸载范围：$UNINSTALL_SCOPE"
   if (( PURGE_SING_BOX )); then
-    echo "The sing-box package will also be removed."
+    echo "同时会移除 sing-box 软件包。"
   else
-    echo "The sing-box package will be kept."
+    echo "将保留 sing-box 软件包。"
   fi
-  read -rp "Continue? [y/N]: " answer
+  read -rp "是否继续？[y/N]：" answer
   case "$answer" in
     y|Y|yes|YES) ;;
-    *) echo "Cancelled"; exit 0 ;;
+    *) echo "已取消"; exit 0 ;;
   esac
 }
 
@@ -1074,13 +1074,13 @@ uninstall_selected() {
 
   if [[ -s "$SERVER_CONF" ]]; then
     if ! command -v jq >/dev/null 2>&1; then
-      echo "Installing jq for safe JSON configuration editing..."
+      echo "正在安装 jq，以安全编辑 JSON 配置……"
       apt update
       apt install -y jq
     fi
 
     if ! jq -e . "$SERVER_CONF" >/dev/null; then
-      echo "Error: $SERVER_CONF is not valid JSON; no server configuration was changed"
+      echo "错误：$SERVER_CONF 不是有效的 JSON，服务端配置未作更改"
       exit 1
     fi
 
@@ -1146,8 +1146,8 @@ uninstall_selected() {
   if (( PURGE_SING_BOX )); then
     if [[ -s "$SERVER_CONF" ]] && command -v jq >/dev/null 2>&1 \
       && (( $(jq '(.inbounds // []) | length' "$SERVER_CONF") > 0 )); then
-      echo "Error: other sing-box inbounds remain, so the package was not removed"
-      echo "Configuration backup: $backup_status"
+      echo "错误：仍有其他 sing-box 入站，因此未移除软件包"
+      echo "配置备份：$backup_status"
       exit 1
     fi
     systemctl disable --now sing-box >/dev/null 2>&1 || true
@@ -1155,12 +1155,12 @@ uninstall_selected() {
   fi
 
   echo
-  echo "Uninstall complete."
-  echo "  scope: $UNINSTALL_SCOPE"
-  echo "  removed_matching_inbounds: $matched"
-  echo "  backup: $backup_status"
+  echo "卸载完成。"
+  echo "  卸载范围：$UNINSTALL_SCOPE"
+  echo "  已移除的匹配入站数：$matched"
+  echo "  备份位置：$backup_status"
   if (( ! PURGE_SING_BOX )); then
-    echo "  sing-box package: kept"
+    echo "  sing-box 软件包：已保留"
   fi
 }
 
@@ -1170,22 +1170,22 @@ prepare_inputs() {
 
   if (( INSTALL_ANYTLS )); then
     if [[ -z "$REALITY_DOMAIN" || "$REALITY_DOMAIN" =~ [[:space:]] ]]; then
-      echo "Error: REALITY domain cannot be empty or contain whitespace"
+      echo "错误：REALITY 域名不能为空或包含空白字符"
       exit 1
     fi
 
     if [[ -z "$ANYTLS_PORT" || "$ANYTLS_PORT" == "auto" || "$ANYTLS_PORT" == "random" ]]; then
       ANYTLS_PORT="$(pick_random_free_high_tcp_port)"
-      ANYTLS_PORT_MODE="random"
+      ANYTLS_PORT_MODE="自动随机"
     elif validate_port "$ANYTLS_PORT"; then
-      ANYTLS_PORT_MODE="manual"
+      ANYTLS_PORT_MODE="手动指定"
     else
-      echo "Error: invalid AnyTLS port: $ANYTLS_PORT"
+      echo "错误：无效的 AnyTLS 端口：$ANYTLS_PORT"
       exit 1
     fi
 
     if is_tcp_port_in_use_by_other "$ANYTLS_PORT"; then
-      echo "Error: TCP port $ANYTLS_PORT is already used by another process"
+      echo "错误：TCP 端口 $ANYTLS_PORT 已被其他进程占用"
       ss -H -lntp 2>/dev/null | awk -v p="$ANYTLS_PORT" '$4 ~ ":" p "$" {print}' || true
       exit 1
     fi
@@ -1193,7 +1193,7 @@ prepare_inputs() {
 
   if (( INSTALL_HY2 )); then
     if [[ -z "$HY2_SNI" || "$HY2_SNI" =~ [[:space:]] ]]; then
-      echo "Error: Hysteria2 SNI cannot be empty or contain whitespace"
+      echo "错误：Hysteria2 SNI 不能为空或包含空白字符"
       exit 1
     fi
 
@@ -1202,41 +1202,41 @@ prepare_inputs() {
 
     if [[ -z "$HY2_PORT" || "$HY2_PORT" == "auto" || "$HY2_PORT" == "random" ]]; then
       HY2_PORT="$FIRST_HOP_PORT"
-      HY2_PORT_MODE="first-hop-port"
+      HY2_PORT_MODE="跳跃范围首端口"
     elif validate_port "$HY2_PORT"; then
-      HY2_PORT_MODE="manual"
+      HY2_PORT_MODE="手动指定"
     else
-      echo "Error: invalid Hysteria2 listen port: $HY2_PORT"
+      echo "错误：无效的 Hysteria2 监听端口：$HY2_PORT"
       exit 1
     fi
 
     if ! validate_positive_number "$HOP_INTERVAL" || (( HOP_INTERVAL < 5 )); then
-      echo "Error: Hysteria2 interval must be an integer greater than or equal to 5"
+      echo "错误：Hysteria2 跳跃间隔必须是大于或等于 5 的整数"
       exit 1
     fi
 
     if [[ -n "$UP_MBPS" ]] && ! validate_positive_number "$UP_MBPS"; then
-      echo "Error: --up must be a positive integer"
+      echo "错误：--up 必须是正整数"
       exit 1
     fi
 
     if [[ -n "$DOWN_MBPS" ]] && ! validate_positive_number "$DOWN_MBPS"; then
-      echo "Error: --down must be a positive integer"
+      echo "错误：--down 必须是正整数"
       exit 1
     fi
 
     if [[ "$OBFS" != "on" && "$OBFS" != "off" ]]; then
-      echo "Error: OBFS must be on or off"
+      echo "错误：OBFS 只能设置为 on 或 off"
       exit 1
     fi
 
     if ! validate_proxy_name; then
-      echo "Error: proxy name may only contain letters, numbers, dot, underscore, and hyphen"
+      echo "错误：代理名称只能包含字母、数字、点、下划线和连字符"
       exit 1
     fi
 
     if is_udp_port_in_use_by_other "$HY2_PORT"; then
-      echo "Error: UDP port $HY2_PORT is already used by another process"
+      echo "错误：UDP 端口 $HY2_PORT 已被其他进程占用"
       ss -H -lunp 2>/dev/null | awk -v p="$HY2_PORT" '$4 ~ ":" p "$" {print}' || true
       exit 1
     fi
@@ -1244,7 +1244,7 @@ prepare_inputs() {
 }
 
 install_dependencies() {
-  echo "Installing dependencies..."
+  echo "正在安装依赖……"
   apt update
   apt install -y curl openssl ca-certificates iproute2 coreutils jq nftables iptables
   curl -fsSL https://sing-box.app/install.sh | sh
@@ -1261,7 +1261,7 @@ generate_anytls_secrets() {
   ANYTLS_SHORT_ID="$(openssl rand -hex 8)"
 
   if [[ -z "$ANYTLS_PRIVATE_KEY" || -z "$ANYTLS_PUBLIC_KEY" || -z "$ANYTLS_PASSWORD" || -z "$ANYTLS_SHORT_ID" ]]; then
-    echo "Error: failed to generate AnyTLS + REALITY keys"
+    echo "错误：生成 AnyTLS + REALITY 密钥失败"
     exit 1
   fi
 }
@@ -1430,34 +1430,34 @@ SURGE
 
 write_info_files() {
   cat > "$COMBINED_INFO" << TXT
-sbox-reality unified install complete
+sbox-reality 统一安装完成
 
-Server:
-  config: $SERVER_CONF
-  installed_anytls_reality: $INSTALL_ANYTLS
-  installed_hysteria2_surge: $INSTALL_HY2
+服务端：
+  配置文件：$SERVER_CONF
+  已安装 AnyTLS + REALITY：$INSTALL_ANYTLS
+  已安装 Hysteria2 + Surge：$INSTALL_HY2
 TXT
 
   if (( INSTALL_ANYTLS )); then
     cat > "$ANYTLS_INFO" << TXT
-AnyTLS + REALITY installed
+AnyTLS + REALITY 安装完成
 
-Server:
-  config: $SERVER_CONF
-  listen_port: $ANYTLS_PORT
-  port_mode: $ANYTLS_PORT_MODE
-  handshake_domain: $REALITY_DOMAIN
+服务端：
+  配置文件：$SERVER_CONF
+  监听端口：$ANYTLS_PORT
+  端口模式：$ANYTLS_PORT_MODE
+  握手域名：$REALITY_DOMAIN
 
-Client outbounds:
-  file: $ANYTLS_CLIENT_OUT
+客户端出站配置：
+  文件：$ANYTLS_CLIENT_OUT
 
-Client parameters:
-  server: $SERVER_IP
-  server_port: $ANYTLS_PORT
-  password: $ANYTLS_PASSWORD
-  server_name: $REALITY_DOMAIN
-  public_key: $ANYTLS_PUBLIC_KEY
-  short_id: $ANYTLS_SHORT_ID
+客户端参数：
+  服务器：$SERVER_IP
+  服务器端口：$ANYTLS_PORT
+  密码：$ANYTLS_PASSWORD
+  服务器名称：$REALITY_DOMAIN
+  公钥：$ANYTLS_PUBLIC_KEY
+  Short ID：$ANYTLS_SHORT_ID
 TXT
     cat "$ANYTLS_INFO" >> "$COMBINED_INFO"
     printf '\n' >> "$COMBINED_INFO"
@@ -1465,59 +1465,59 @@ TXT
 
   if (( INSTALL_HY2 )); then
     cat > "$HY2_INFO" << TXT
-Hysteria2 + Surge port hopping installed
+Hysteria2 + Surge 端口跳跃安装完成
 
-Server:
-  config: $SERVER_CONF
-  listen_port: $HY2_PORT
-  port_mode: $HY2_PORT_MODE
-  sni: $HY2_SNI
-  certificate: $CERT_PATH
-  key: $KEY_PATH
+服务端：
+  配置文件：$SERVER_CONF
+  监听端口：$HY2_PORT
+  端口模式：$HY2_PORT_MODE
+  SNI：$HY2_SNI
+  证书：$CERT_PATH
+  私钥：$KEY_PATH
 
-Port hopping:
-  public_udp_ports: $NORMALIZED_HOP_PORTS
-  interval: ${HOP_INTERVAL}s
-  helper: $PORT_HELPER
-  helper_env: $PORT_ENV
-  systemd_dropin: $SYSTEMD_DROPIN
+端口跳跃：
+  公共 UDP 端口：$NORMALIZED_HOP_PORTS
+  跳跃间隔：${HOP_INTERVAL} 秒
+  辅助脚本：$PORT_HELPER
+  环境文件：$PORT_ENV
+  systemd 配置：$SYSTEMD_DROPIN
 
-Client files:
-  sing-box outbounds: $HY2_CLIENT_OUT
-  surge snippet: $SURGE_CONF
-  hysteria2 url: $HY2_URL_FILE
+客户端文件：
+  sing-box 出站配置：$HY2_CLIENT_OUT
+  Surge 配置片段：$SURGE_CONF
+  Hysteria2 链接：$HY2_URL_FILE
 
-Client URL:
+客户端链接：
   $HY2_SHARE_URL
 
-Client parameters:
-  server: $SERVER_IP
-  listen_port: $HY2_PORT
-  port_hopping: $NORMALIZED_HOP_PORTS
-  port_hopping_interval: $HOP_INTERVAL
-  password: $HY2_PASSWORD
-  sni: $HY2_SNI
-  skip_cert_verify: true
+客户端参数：
+  服务器：$SERVER_IP
+  监听端口：$HY2_PORT
+  跳跃端口：$NORMALIZED_HOP_PORTS
+  跳跃间隔：$HOP_INTERVAL
+  密码：$HY2_PASSWORD
+  SNI：$HY2_SNI
+  跳过证书验证：true
 TXT
 
     if [[ "$OBFS" == "on" ]]; then
       cat >> "$HY2_INFO" << TXT
-  salamander_password: $OBFS_PASSWORD
+  Salamander 密码：$OBFS_PASSWORD
 TXT
     fi
 
     cat >> "$HY2_INFO" << TXT
 
-Firewall:
-  Allow UDP public ports: $NORMALIZED_HOP_PORTS
-  If your local firewall filters after REDIRECT, also allow UDP listen port: $HY2_PORT
+防火墙：
+  请放行公共 UDP 端口：$NORMALIZED_HOP_PORTS
+  如果本机防火墙在重定向后过滤流量，还需放行 UDP 监听端口：$HY2_PORT
 TXT
     cat "$HY2_INFO" >> "$COMBINED_INFO"
     printf '\n' >> "$COMBINED_INFO"
   fi
 
   cat >> "$COMBINED_INFO" << TXT
-Commands:
+常用命令：
   systemctl status sing-box --no-pager
   journalctl -u sing-box -f
   systemctl restart sing-box
@@ -1537,19 +1537,19 @@ print_summary() {
 
   if (( INSTALL_ANYTLS )); then
     echo
-    echo "AnyTLS + REALITY client outbounds:"
+    echo "AnyTLS + REALITY 客户端出站配置："
     cat "$ANYTLS_CLIENT_OUT"
   fi
 
   if (( INSTALL_HY2 )); then
     echo
-    echo "Surge snippet:"
+    echo "Surge 配置片段："
     cat "$SURGE_CONF"
     echo
-    echo "Hysteria2 URL:"
+    echo "Hysteria2 链接："
     cat "$HY2_URL_FILE"
     echo
-    echo "Hysteria2 sing-box client outbounds:"
+    echo "Hysteria2 sing-box 客户端出站配置："
     cat "$HY2_CLIENT_OUT"
   fi
 }
@@ -1560,18 +1560,18 @@ main() {
   choose_uninstall_scope
 
   if (( PURGE_SING_BOX )) && [[ "$ACTION" != "uninstall" ]]; then
-    echo "Error: --purge can only be used with --uninstall all"
+    echo "错误：--purge 只能与 --uninstall all 一起使用"
     exit 1
   fi
 
   if [[ $EUID -ne 0 ]]; then
-    echo "Error: please run as root"
-    echo "Example: sudo bash $0 --mode both"
+    echo "错误：请使用 root 用户运行脚本"
+    echo "示例：sudo bash $0 --mode both"
     exit 1
   fi
 
   if ! command -v apt >/dev/null 2>&1; then
-    echo "Error: this script only supports Debian/Ubuntu with apt"
+    echo "错误：本脚本仅支持使用 apt 的 Debian/Ubuntu 系统"
     exit 1
   fi
 
@@ -1605,18 +1605,18 @@ main() {
 
   prepare_inputs
 
-  echo "sbox-reality unified installer"
-  echo "  install_anytls_reality: $INSTALL_ANYTLS"
-  echo "  install_hysteria2_surge: $INSTALL_HY2"
+  echo "sbox-reality 统一安装脚本"
+  echo "  安装 AnyTLS + REALITY：$INSTALL_ANYTLS"
+  echo "  安装 Hysteria2 + Surge：$INSTALL_HY2"
   if (( INSTALL_ANYTLS )); then
-    echo "  anytls_domain: $REALITY_DOMAIN"
-    echo "  anytls_port:   $ANYTLS_PORT ($ANYTLS_PORT_MODE)"
+    echo "  AnyTLS 域名：$REALITY_DOMAIN"
+    echo "  AnyTLS 端口：$ANYTLS_PORT ($ANYTLS_PORT_MODE)"
   fi
   if (( INSTALL_HY2 )); then
-    echo "  hy2_sni:       $HY2_SNI"
-    echo "  hy2_port:      $HY2_PORT ($HY2_PORT_MODE)"
-    echo "  hy2_hop_ports: $NORMALIZED_HOP_PORTS"
-    echo "  hy2_interval:  ${HOP_INTERVAL}s"
+    echo "  Hysteria2 SNI：$HY2_SNI"
+    echo "  Hysteria2 端口：$HY2_PORT ($HY2_PORT_MODE)"
+    echo "  Hysteria2 跳跃端口：$NORMALIZED_HOP_PORTS"
+    echo "  Hysteria2 跳跃间隔：${HOP_INTERVAL} 秒"
   fi
   echo
 
