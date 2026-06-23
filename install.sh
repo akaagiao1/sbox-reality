@@ -11,6 +11,8 @@ ASSUME_YES=0
 
 REALITY_DOMAIN="${REALITY_DOMAIN:-${DOMAIN:-www.apple.com}}"
 ANYTLS_PORT="${ANYTLS_PORT:-auto}"
+VLESS_DOMAIN="${VLESS_DOMAIN:-${REALITY_DOMAIN}}"
+VLESS_PORT="${VLESS_PORT:-auto}"
 HIGH_PORT_MIN="${HIGH_PORT_MIN:-20000}"
 HIGH_PORT_MAX="${HIGH_PORT_MAX:-65535}"
 
@@ -28,10 +30,13 @@ PROXY_NAME="${PROXY_NAME:-HY2}"
 
 SERVER_CONF="/etc/sing-box/config.json"
 ANYTLS_CLIENT_OUT="/root/client-outbounds-anytls-reality.json"
+VLESS_CLIENT_OUT="/root/client-outbounds-vless-reality.json"
+VLESS_URL_FILE="/root/vless-reality-url.txt"
 HY2_CLIENT_OUT="/root/client-outbounds-hysteria2.json"
 SURGE_CONF="/root/surge-hysteria2.conf"
 HY2_URL_FILE="/root/hysteria2-url.txt"
 ANYTLS_INFO="/root/anytls-reality-info.txt"
+VLESS_INFO="/root/vless-reality-info.txt"
 HY2_INFO="/root/hysteria2-surge-info.txt"
 COMBINED_INFO="/root/sbox-reality-info.txt"
 BACKUP_ROOT="/root/sbox-reality-backups"
@@ -46,8 +51,10 @@ CERT_PATH="${CERT_PATH:-$DEFAULT_CERT_PATH}"
 KEY_PATH="${KEY_PATH:-$DEFAULT_KEY_PATH}"
 
 INSTALL_ANYTLS=0
+INSTALL_VLESS=0
 INSTALL_HY2=0
 ANYTLS_PORT_MODE=""
+VLESS_PORT_MODE=""
 HY2_PORT_MODE=""
 FIRST_HOP_PORT=""
 NORMALIZED_HOP_PORTS=""
@@ -58,6 +65,11 @@ ANYTLS_PRIVATE_KEY=""
 ANYTLS_PUBLIC_KEY=""
 ANYTLS_PASSWORD=""
 ANYTLS_SHORT_ID=""
+VLESS_PRIVATE_KEY=""
+VLESS_PUBLIC_KEY=""
+VLESS_UUID=""
+VLESS_SHORT_ID=""
+VLESS_SHARE_URL=""
 HY2_PASSWORD=""
 HY2_SHARE_URL=""
 SURGE_PROXY_LINE=""
@@ -141,14 +153,18 @@ usage() {
   bash $0
   bash $0 --mode 1
   bash $0 --mode 2
+  bash $0 --mode vless
   bash $0 --mode both
+  bash $0 --mode full
   bash $0 --restore
-  bash $0 --uninstall anytls|hy2|all
+  bash $0 --uninstall anytls|vless|hy2|all
 
 安装模式：
   1, anytls     安装 AnyTLS + REALITY
   2, hy2        安装 Hysteria2 + Surge 端口跳跃
   3, both       在同一份 sing-box 配置中安装两者
+  6, vless      安装 VLESS + REALITY
+  7, full       同时安装 AnyTLS、VLESS 和 Hysteria2
   4, uninstall  卸载一个或全部配置
   5, restore    恢复最新的配置备份
 
@@ -158,13 +174,17 @@ usage() {
       --config new     备份现有配置并生成新配置
 
 卸载选项：
-      --uninstall      卸载范围：anytls、hy2 或 all
+      --uninstall      卸载范围：anytls、vless、hy2 或 all
       --purge          同时移除 sing-box 软件包（仅适用于 --uninstall all）
   -y, --yes            跳过卸载确认
 
 AnyTLS + REALITY 选项：
   -d, --domain        REALITY 握手域名，默认：www.apple.com
       --anytls-port   AnyTLS TCP 监听端口，默认：自动选择
+
+VLESS + REALITY 选项：
+      --vless-domain  VLESS REALITY 握手域名，默认：www.apple.com
+      --vless-port    VLESS TCP 监听端口，默认：自动选择
 
 Hysteria2 + Surge 选项：
   -s, --sni           TLS SNI 和自签证书通用名称，默认：www.bing.com
@@ -183,13 +203,14 @@ Hysteria2 + Surge 选项：
       --name          Surge 代理名称，默认：HY2
 
 通用选项：
-  -m, --mode          模式：1-5、anytls、hy2、both、uninstall、restore
-  -p, --port          模式 1 或 2 的端口；同时安装时请分别使用 --anytls-port 和 --hy2-port
+  -m, --mode          模式：1-7、anytls、vless、hy2、both、full、uninstall、restore
+  -p, --port          当前单协议模式的端口；同时安装时请分别使用各协议端口选项
   -h, --help          显示帮助
 
 环境变量：
   INSTALL_MODE, CONFIG_POLICY, UNINSTALL_SCOPE, PORT,
   REALITY_DOMAIN, DOMAIN, ANYTLS_PORT,
+  VLESS_DOMAIN, VLESS_PORT,
   HIGH_PORT_MIN, HIGH_PORT_MAX,
   HY2_SNI, SNI, HY2_PORT, HOP_PORTS, HOP_INTERVAL,
   UP_MBPS, DOWN_MBPS, OBFS, OBFS_PASSWORD,
@@ -212,8 +233,16 @@ while [[ $# -gt 0 ]]; do
       INSTALL_MODE="2"
       shift
       ;;
+    6|vless|vless-reality)
+      INSTALL_MODE="6"
+      shift
+      ;;
     3|both|all)
       INSTALL_MODE="3"
+      shift
+      ;;
+    7|full|all3|all-protocols)
+      INSTALL_MODE="7"
       shift
       ;;
     4|uninstall|remove)
@@ -260,10 +289,19 @@ while [[ $# -gt 0 ]]; do
       ;;
     -d|--domain|--reality-domain)
       REALITY_DOMAIN="${2:-}"
+      VLESS_DOMAIN="${2:-}"
       shift 2
       ;;
     --anytls-port)
       ANYTLS_PORT="${2:-}"
+      shift 2
+      ;;
+    --vless-domain)
+      VLESS_DOMAIN="${2:-}"
+      shift 2
+      ;;
+    --vless-port)
+      VLESS_PORT="${2:-}"
       shift 2
       ;;
     -s|--sni|--hy2-sni)
@@ -350,8 +388,10 @@ choose_mode() {
     echo "  3) 同时安装两者"
     echo "  4) 卸载"
     echo "  5) 恢复最新备份"
+    echo "  6) 安装 VLESS + REALITY"
+    echo "  7) 同时安装 AnyTLS、VLESS 和 Hysteria2"
     echo
-    read -rp "请输入选项 [1-5]：" INSTALL_MODE
+    read -rp "请输入选项 [1-7]：" INSTALL_MODE
   else
     echo "错误：非交互模式下必须指定安装模式"
     echo "示例：bash $0 --mode both"
@@ -371,8 +411,16 @@ normalize_mode() {
     2|hy2|hysteria2|surge)
       INSTALL_HY2=1
       ;;
+    6|vless|vless-reality)
+      INSTALL_VLESS=1
+      ;;
     3|both|all)
       INSTALL_ANYTLS=1
+      INSTALL_HY2=1
+      ;;
+    7|full|all3|all-protocols)
+      INSTALL_ANYTLS=1
+      INSTALL_VLESS=1
       INSTALL_HY2=1
       ;;
     4|uninstall|remove)
@@ -397,10 +445,11 @@ choose_uninstall_scope() {
     if [[ -t 0 ]]; then
       echo "请选择卸载范围："
       echo "  1) 仅 AnyTLS + REALITY"
-      echo "  2) 仅 Hysteria2 + 端口跳跃"
-      echo "  3) 两项配置全部卸载"
+      echo "  2) 仅 VLESS + REALITY"
+      echo "  3) 仅 Hysteria2 + 端口跳跃"
+      echo "  4) 全部卸载"
       echo
-      read -rp "请输入选项 [1-3]：" UNINSTALL_SCOPE
+      read -rp "请输入选项 [1-4]：" UNINSTALL_SCOPE
     else
       echo "错误：非交互模式下必须指定卸载范围"
       echo "示例：bash $0 --uninstall all --yes"
@@ -412,10 +461,13 @@ choose_uninstall_scope() {
     1|anytls|reality)
       UNINSTALL_SCOPE="anytls"
       ;;
-    2|hy2|hysteria2|surge)
+    2|vless|vless-reality)
+      UNINSTALL_SCOPE="vless"
+      ;;
+    3|hy2|hysteria2|surge)
       UNINSTALL_SCOPE="hy2"
       ;;
-    3|both|all)
+    4|both|full|all)
       UNINSTALL_SCOPE="all"
       ;;
     *)
@@ -435,6 +487,10 @@ apply_shared_port() {
 
   if (( INSTALL_ANYTLS )); then
     ANYTLS_PORT="$SHARED_PORT"
+  fi
+
+  if (( INSTALL_VLESS )); then
+    VLESS_PORT="$SHARED_PORT"
   fi
 
   if (( INSTALL_HY2 )); then
@@ -658,6 +714,17 @@ build_hy2_share_url() {
   HY2_SHARE_URL="hysteria2://$(url_encode "$HY2_PASSWORD")@${SERVER_IP}:${uri_ports}/?${query}#$(url_encode "$PROXY_NAME")"
 }
 
+build_vless_share_url() {
+  local query
+
+  query="encryption=none&flow=xtls-rprx-vision&security=reality"
+  query="${query}&sni=$(url_encode "$VLESS_DOMAIN")&fp=chrome"
+  query="${query}&pbk=$(url_encode "$VLESS_PUBLIC_KEY")&sid=$(url_encode "$VLESS_SHORT_ID")"
+  query="${query}&type=tcp&headerType=none"
+
+  VLESS_SHARE_URL="vless://${VLESS_UUID}@${SERVER_IP}:${VLESS_PORT}?${query}#VLESS-Reality"
+}
+
 prepare_certificate() {
   local san_type
 
@@ -857,10 +924,13 @@ backup_existing_files() {
   local -a sources=(
     "$SERVER_CONF"
     "$ANYTLS_CLIENT_OUT"
+    "$VLESS_CLIENT_OUT"
+    "$VLESS_URL_FILE"
     "$HY2_CLIENT_OUT"
     "$SURGE_CONF"
     "$HY2_URL_FILE"
     "$ANYTLS_INFO"
+    "$VLESS_INFO"
     "$HY2_INFO"
     "$COMBINED_INFO"
     "$PORT_ENV"
@@ -1074,10 +1144,13 @@ restore_latest_backup() {
   local -a destinations=(
     "$SERVER_CONF"
     "$ANYTLS_CLIENT_OUT"
+    "$VLESS_CLIENT_OUT"
+    "$VLESS_URL_FILE"
     "$HY2_CLIENT_OUT"
     "$SURGE_CONF"
     "$HY2_URL_FILE"
     "$ANYTLS_INFO"
+    "$VLESS_INFO"
     "$HY2_INFO"
     "$COMBINED_INFO"
     "$PORT_ENV"
@@ -1196,6 +1269,10 @@ remove_anytls_files() {
   rm -f "$ANYTLS_CLIENT_OUT" "$ANYTLS_INFO"
 }
 
+remove_vless_files() {
+  rm -f "$VLESS_CLIENT_OUT" "$VLESS_URL_FILE" "$VLESS_INFO"
+}
+
 remove_hy2_files() {
   disable_hy2_port_hopping
   rm -f "$PORT_HELPER" "$HY2_CLIENT_OUT" "$SURGE_CONF" "$HY2_URL_FILE" "$HY2_INFO"
@@ -1212,6 +1289,7 @@ remove_hy2_files() {
 
 uninstall_selected() {
   local remove_anytls=false
+  local remove_vless=false
   local remove_hy2=false
   local matched=0
   local remaining=0
@@ -1222,11 +1300,15 @@ uninstall_selected() {
     anytls)
       remove_anytls=true
       ;;
+    vless)
+      remove_vless=true
+      ;;
     hy2)
       remove_hy2=true
       ;;
     all)
       remove_anytls=true
+      remove_vless=true
       remove_hy2=true
       ;;
   esac
@@ -1250,10 +1332,11 @@ uninstall_selected() {
       backup_status="$LAST_BACKUP_DIR"
     fi
 
-    matched="$(jq --argjson remove_anytls "$remove_anytls" --argjson remove_hy2 "$remove_hy2" '
+    matched="$(jq --argjson remove_anytls "$remove_anytls" --argjson remove_vless "$remove_vless" --argjson remove_hy2 "$remove_hy2" '
       [(.inbounds // [])[]
         | select(
             (($remove_anytls == true) and (.tag == "anytls-in"))
+            or (($remove_vless == true) and (.tag == "vless-in"))
             or (($remove_hy2 == true) and (.tag == "hy2-in"))
           )
       ] | length
@@ -1261,11 +1344,12 @@ uninstall_selected() {
 
     if (( matched > 0 )); then
       temp_config="$(mktemp)"
-      jq --argjson remove_anytls "$remove_anytls" --argjson remove_hy2 "$remove_hy2" '
+      jq --argjson remove_anytls "$remove_anytls" --argjson remove_vless "$remove_vless" --argjson remove_hy2 "$remove_hy2" '
         .inbounds = [
           (.inbounds // [])[]
           | select(
               (($remove_anytls == false) or (.tag != "anytls-in"))
+              and (($remove_vless == false) or (.tag != "vless-in"))
               and (($remove_hy2 == false) or (.tag != "hy2-in"))
             )
         ]
@@ -1290,6 +1374,9 @@ uninstall_selected() {
 
   if [[ "$remove_anytls" == true ]]; then
     remove_anytls_files
+  fi
+  if [[ "$remove_vless" == true ]]; then
+    remove_vless_files
   fi
   if [[ "$remove_hy2" == true ]]; then
     remove_hy2_files
@@ -1326,6 +1413,7 @@ uninstall_selected() {
 
 prepare_inputs() {
   REALITY_DOMAIN="$(strip_host "$REALITY_DOMAIN")"
+  VLESS_DOMAIN="$(strip_host "$VLESS_DOMAIN")"
   HY2_SNI="$(strip_host "$HY2_SNI")"
 
   if (( INSTALL_ANYTLS )); then
@@ -1347,6 +1435,37 @@ prepare_inputs() {
     if is_tcp_port_in_use_by_other "$ANYTLS_PORT"; then
       echo "错误：TCP 端口 $ANYTLS_PORT 已被其他进程占用"
       ss -H -lntp 2>/dev/null | awk -v p="$ANYTLS_PORT" '$4 ~ ":" p "$" {print}' || true
+      exit 1
+    fi
+  fi
+
+  if (( INSTALL_VLESS )); then
+    if [[ -z "$VLESS_DOMAIN" || "$VLESS_DOMAIN" =~ [[:space:]] ]]; then
+      echo "错误：VLESS REALITY 域名不能为空或包含空白字符"
+      exit 1
+    fi
+
+    if [[ -z "$VLESS_PORT" || "$VLESS_PORT" == "auto" || "$VLESS_PORT" == "random" ]]; then
+      VLESS_PORT="$(pick_random_free_high_tcp_port)"
+      while (( INSTALL_ANYTLS )) && [[ "$VLESS_PORT" == "$ANYTLS_PORT" ]]; do
+        VLESS_PORT="$(pick_random_free_high_tcp_port)"
+      done
+      VLESS_PORT_MODE="自动随机"
+    elif validate_port "$VLESS_PORT"; then
+      VLESS_PORT_MODE="手动指定"
+    else
+      echo "错误：无效的 VLESS 端口：$VLESS_PORT"
+      exit 1
+    fi
+
+    if (( INSTALL_ANYTLS )) && [[ "$VLESS_PORT" == "$ANYTLS_PORT" ]]; then
+      echo "错误：VLESS 端口不能与 AnyTLS 端口相同：$VLESS_PORT"
+      exit 1
+    fi
+
+    if is_tcp_port_in_use_by_other "$VLESS_PORT"; then
+      echo "错误：TCP 端口 $VLESS_PORT 已被其他进程占用"
+      ss -H -lntp 2>/dev/null | awk -v p="$VLESS_PORT" '$4 ~ ":" p "$" {print}' || true
       exit 1
     fi
   fi
@@ -1489,6 +1608,21 @@ generate_anytls_secrets() {
   fi
 }
 
+generate_vless_secrets() {
+  local keypair
+
+  keypair="$(sing-box generate reality-keypair)"
+  VLESS_PRIVATE_KEY="$(echo "$keypair" | awk -F': ' '/PrivateKey/ {print $2}')"
+  VLESS_PUBLIC_KEY="$(echo "$keypair" | awk -F': ' '/PublicKey/ {print $2}')"
+  VLESS_UUID="$(sing-box generate uuid)"
+  VLESS_SHORT_ID="$(openssl rand -hex 8)"
+
+  if [[ -z "$VLESS_PRIVATE_KEY" || -z "$VLESS_PUBLIC_KEY" || -z "$VLESS_UUID" || -z "$VLESS_SHORT_ID" ]]; then
+    echo "错误：生成 VLESS + REALITY 密钥失败"
+    exit 1
+  fi
+}
+
 generate_hy2_secrets() {
   if [[ "$OBFS" != "off" && -z "$OBFS_PASSWORD" ]]; then
     OBFS_PASSWORD="$(openssl rand -hex 16)"
@@ -1528,6 +1662,38 @@ anytls_inbound_json() {
 JSON
 }
 
+vless_inbound_json() {
+  cat << JSON
+    {
+      "type": "vless",
+      "tag": "vless-in",
+      "listen": "::",
+      "listen_port": ${VLESS_PORT},
+      "users": [
+        {
+          "uuid": "${VLESS_UUID}",
+          "flow": "xtls-rprx-vision"
+        }
+      ],
+      "tls": {
+        "enabled": true,
+        "server_name": "${VLESS_DOMAIN}",
+        "reality": {
+          "enabled": true,
+          "handshake": {
+            "server": "${VLESS_DOMAIN}",
+            "server_port": 443
+          },
+          "private_key": "${VLESS_PRIVATE_KEY}",
+          "short_id": [
+            "${VLESS_SHORT_ID}"
+          ]
+        }
+      }
+    }
+JSON
+}
+
 hy2_inbound_json() {
   cat << JSON
     {
@@ -1551,15 +1717,22 @@ JSON
 }
 
 write_server_config() {
-  local inbounds
+  local inbounds="" sep=""
 
-  if (( INSTALL_ANYTLS && INSTALL_HY2 )); then
-    inbounds="$(anytls_inbound_json),
-$(hy2_inbound_json)"
-  elif (( INSTALL_ANYTLS )); then
+  if (( INSTALL_ANYTLS )); then
     inbounds="$(anytls_inbound_json)"
-  else
-    inbounds="$(hy2_inbound_json)"
+    sep=","
+  fi
+
+  if (( INSTALL_VLESS )); then
+    inbounds="${inbounds}${sep}
+$(vless_inbound_json)"
+    sep=","
+  fi
+
+  if (( INSTALL_HY2 )); then
+    inbounds="${inbounds}${sep}
+$(hy2_inbound_json)"
   fi
 
   cat > "$SERVER_CONF" << JSON
@@ -1617,6 +1790,40 @@ write_anytls_client() {
 JSON
 }
 
+write_vless_client() {
+  build_vless_share_url
+
+  cat > "$VLESS_CLIENT_OUT" << JSON
+{
+  "outbounds": [
+    {
+      "type": "vless",
+      "tag": "proxy",
+      "server": "${SERVER_IP}",
+      "server_port": ${VLESS_PORT},
+      "uuid": "${VLESS_UUID}",
+      "flow": "xtls-rprx-vision",
+      "tls": {
+        "enabled": true,
+        "server_name": "${VLESS_DOMAIN}",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "${VLESS_PUBLIC_KEY}",
+          "short_id": "${VLESS_SHORT_ID}"
+        }
+      }
+    }
+  ]
+}
+JSON
+
+  printf '%s\n' "$VLESS_SHARE_URL" > "$VLESS_URL_FILE"
+}
+
 write_hy2_clients() {
   build_hy2_share_url
   SURGE_PROXY_LINE="$(build_surge_proxy_line)"
@@ -1667,6 +1874,7 @@ sbox-reality 统一安装完成
 服务端：
   配置文件：$SERVER_CONF
   已安装 AnyTLS + REALITY：$INSTALL_ANYTLS
+  已安装 VLESS + REALITY：$INSTALL_VLESS
   已安装 Hysteria2 + Surge：$INSTALL_HY2
 TXT
 
@@ -1692,6 +1900,37 @@ AnyTLS + REALITY 安装完成
   Short ID：$ANYTLS_SHORT_ID
 TXT
     cat "$ANYTLS_INFO" >> "$COMBINED_INFO"
+    printf '\n' >> "$COMBINED_INFO"
+  fi
+
+  if (( INSTALL_VLESS )); then
+    cat > "$VLESS_INFO" << TXT
+VLESS + REALITY 安装完成
+
+服务端：
+  配置文件：$SERVER_CONF
+  监听端口：$VLESS_PORT
+  端口模式：$VLESS_PORT_MODE
+  握手域名：$VLESS_DOMAIN
+
+客户端文件：
+  sing-box 出站配置：$VLESS_CLIENT_OUT
+  VLESS 分享链接：$VLESS_URL_FILE
+
+客户端链接：
+$VLESS_SHARE_URL
+
+客户端参数：
+  服务器：$SERVER_IP
+  服务器端口：$VLESS_PORT
+  UUID：$VLESS_UUID
+  Flow：xtls-rprx-vision
+  服务器名称：$VLESS_DOMAIN
+  Fingerprint：chrome
+  公钥：$VLESS_PUBLIC_KEY
+  Short ID：$VLESS_SHORT_ID
+TXT
+    cat "$VLESS_INFO" >> "$COMBINED_INFO"
     printf '\n' >> "$COMBINED_INFO"
   fi
 
@@ -1791,6 +2030,15 @@ print_summary() {
     cat "$ANYTLS_CLIENT_OUT"
   fi
 
+  if (( INSTALL_VLESS )); then
+    echo
+    echo "VLESS + REALITY 分享链接："
+    cat "$VLESS_URL_FILE"
+    echo
+    echo "VLESS + REALITY 客户端出站配置："
+    cat "$VLESS_CLIENT_OUT"
+  fi
+
   if (( INSTALL_HY2 )); then
     echo
     echo "Surge 配置片段："
@@ -1854,10 +2102,15 @@ main() {
 
   echo "sbox-reality 统一安装脚本"
   echo "  安装 AnyTLS + REALITY：$INSTALL_ANYTLS"
+  echo "  安装 VLESS + REALITY：$INSTALL_VLESS"
   echo "  安装 Hysteria2 + Surge：$INSTALL_HY2"
   if (( INSTALL_ANYTLS )); then
     echo "  AnyTLS 域名：$REALITY_DOMAIN"
     echo "  AnyTLS 端口：$ANYTLS_PORT ($ANYTLS_PORT_MODE)"
+  fi
+  if (( INSTALL_VLESS )); then
+    echo "  VLESS 域名：$VLESS_DOMAIN"
+    echo "  VLESS 端口：$VLESS_PORT ($VLESS_PORT_MODE)"
   fi
   if (( INSTALL_HY2 )); then
     echo "  Hysteria2 SNI：$HY2_SNI"
@@ -1874,6 +2127,10 @@ main() {
     generate_anytls_secrets
   fi
 
+  if (( INSTALL_VLESS )); then
+    generate_vless_secrets
+  fi
+
   if (( INSTALL_HY2 )); then
     prepare_certificate
     generate_hy2_secrets
@@ -1887,6 +2144,10 @@ main() {
 
   if (( INSTALL_ANYTLS )); then
     write_anytls_client
+  fi
+
+  if (( INSTALL_VLESS )); then
+    write_vless_client
   fi
 
   if (( INSTALL_HY2 )); then

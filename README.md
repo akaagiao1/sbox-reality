@@ -5,8 +5,9 @@
 支持：
 
 - **AnyTLS + REALITY**
+- **VLESS + REALITY**
 - **Hysteria2 + Surge 端口跳跃**
-- **同时安装两个入站到同一个 sing-box 配置**
+- **同时安装多个入站到同一个 sing-box 配置**
 - **按协议卸载、保留配置重装或生成全新配置**
 
 本项目支持 Debian、Ubuntu 和 Alpine Linux VPS，默认自动选择一个当前未被占用的随机高端口，完成服务端部署，并生成可直接合并到客户端配置中的 `outbounds` 片段。
@@ -38,6 +39,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 3) 同时安装两者
 4) 卸载
 5) 恢复最新备份
+6) 安装 VLESS + REALITY
+7) 同时安装 AnyTLS、VLESS 和 Hysteria2
 ```
 
 也可以直接指定安装模式：
@@ -51,9 +54,15 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 
 # 同时安装两个入站
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode both
+
+# 只安装 VLESS + REALITY
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode vless
+
+# 同时安装三个入站
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode full
 ```
 
-同时安装时，脚本会生成同一个 `/etc/sing-box/config.json`，其中包含 `anytls-in` 和 `hy2-in` 两个入站；不会用第二个协议覆盖第一个协议。
+同时安装时，脚本会生成同一个 `/etc/sing-box/config.json`，其中包含所选协议入站；不会用第二个协议覆盖第一个协议。
 
 ---
 
@@ -173,6 +182,29 @@ HIGH_PORT_MIN=30000 HIGH_PORT_MAX=50000 bash <(curl -fsSL https://raw.githubuser
 
 ---
 
+## VLESS + REALITY
+
+默认配置：
+
+- REALITY 握手域名：`www.apple.com`
+- VLESS 监听端口：自动随机未占用高端口，默认范围 `20000-65535`
+- Flow：`xtls-rprx-vision`
+- 客户端指纹：`chrome`
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode vless
+```
+
+自定义 VLESS REALITY 域名和端口：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode vless --vless-domain www.apple.com --vless-port auto
+```
+
+安装完成后会输出 sing-box 客户端 `outbounds` 和一条 `vless://...` 分享链接。
+
+---
+
 ## Hysteria2 + Surge 端口跳跃
 
 默认配置：
@@ -258,12 +290,13 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 - 自动安装 / 更新 sing-box
 - 菜单选择安装、重装或卸载
 - 重装时可沿用旧配置，或自动备份后生成新配置
-- 可单独卸载 AnyTLS、HY2，或完整卸载
+- 可单独卸载 AnyTLS、VLESS、HY2，或完整卸载
 - 默认随机选择当前未被占用的高端口
-- 支持手动指定 AnyTLS 监听端口
+- 支持手动指定 AnyTLS / VLESS / Hysteria2 监听端口
 - 支持自定义随机端口范围
 - 自动生成 REALITY 私钥和公钥
 - 自动生成 AnyTLS 密码
+- 自动生成 VLESS UUID
 - 自动生成 `short_id`
 - 自动写入服务端配置
 - 自动生成客户端 `outbounds` 片段
@@ -288,15 +321,17 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 
 | 参数 | 说明 | 默认值 |
 | --- | --- | --- |
-| `-m`, `--mode` | 操作模式：`1`/`anytls`、`2`/`hy2`、`3`/`both`、`4`/`uninstall`、`5`/`restore` | 交互菜单 |
+| `-m`, `--mode` | 操作模式：`1`/`anytls`、`2`/`hy2`、`3`/`both`、`4`/`uninstall`、`5`/`restore`、`6`/`vless`、`7`/`full` | 交互菜单 |
 | `--restore` | 直接恢复最近一次有效备份 | 关闭 |
 | `--config` | 选择 `keep` 沿用当前配置、`restore` 恢复最近备份或 `new` 生成新配置 | 交互询问 |
-| `--uninstall` | 卸载范围：`anytls`、`hy2` 或 `all` | 卸载子菜单 |
+| `--uninstall` | 卸载范围：`anytls`、`vless`、`hy2` 或 `all` | 卸载子菜单 |
 | `--purge` | 卸载全部配置时同时删除 sing-box 软件包 | 关闭 |
 | `-y`, `--yes` | 跳过卸载确认，适合非交互执行 | 关闭 |
 | `-d`, `--domain` | REALITY 握手域名 | `www.apple.com` |
-| `-p`, `--port` | 当前模式的监听端口；`--mode 1` 时对应 AnyTLS，`--mode 2` 时对应 Hysteria2 | `auto` |
+| `-p`, `--port` | 当前单协议模式的监听端口；同时安装时建议使用各协议端口选项 | `auto` |
 | `--anytls-port` | AnyTLS TCP 监听端口 | `auto` |
+| `--vless-domain` | VLESS REALITY 握手域名 | `www.apple.com` |
+| `--vless-port` | VLESS TCP 监听端口 | `auto` |
 | `--hy2-port` | Hysteria2 UDP 实际监听端口；同时安装时推荐使用 | `auto` |
 | `-h`, `--help` | 查看帮助 | - |
 
@@ -309,6 +344,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 | `INSTALL_MODE` | 安装模式 | 交互菜单 |
 | `PORT` | 兼容旧脚本的监听端口；会按当前模式分配给对应协议 | 空 |
 | `ANYTLS_PORT` | AnyTLS TCP 监听端口 | `auto` |
+| `VLESS_DOMAIN` | VLESS REALITY 握手域名 | `www.apple.com` |
+| `VLESS_PORT` | VLESS TCP 监听端口 | `auto` |
 | `HY2_PORT` | Hysteria2 UDP 实际监听端口 | `auto` |
 
 示例：
@@ -316,8 +353,9 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode 1 -d www.apple.com
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode 1 -d www.microsoft.com -p 8443
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode vless --vless-domain www.apple.com --vless-port auto
 HIGH_PORT_MIN=30000 HIGH_PORT_MAX=50000 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode 1
-bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode both --anytls-port 8443 --hy2-port 20000 --ports 20000-50000
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode full --anytls-port 8443 --vless-port auto --hy2-port 20000 --ports 20000-50000
 ```
 
 Hysteria2 + Surge 参数：
@@ -350,6 +388,15 @@ Hysteria2 + Surge 参数：
 安装信息：/root/anytls-reality-info.txt
 ```
 
+VLESS + REALITY 会生成：
+
+```text
+服务端配置：/etc/sing-box/config.json
+sing-box 客户端 outbounds：/root/client-outbounds-vless-reality.json
+VLESS 分享链接：/root/vless-reality-url.txt
+安装信息：/root/vless-reality-info.txt
+```
+
 Hysteria2 + Surge 脚本会生成：
 
 ```text
@@ -369,6 +416,12 @@ Surge 配置片段：/root/surge-hysteria2.conf
 
 ```bash
 cat /root/client-outbounds-anytls-reality.json
+```
+
+查看 VLESS 分享链接：
+
+```bash
+cat /root/vless-reality-url.txt
 ```
 
 查看 Surge 片段：
