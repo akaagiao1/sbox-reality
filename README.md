@@ -36,11 +36,10 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 ```text
 1) 安装 AnyTLS + REALITY
 2) 安装 Hysteria2 + Surge 端口跳跃
-3) 同时安装两者
-4) 卸载
-5) 恢复最新备份
-6) 安装 VLESS + REALITY
-7) 同时安装 AnyTLS、VLESS 和 Hysteria2
+3) 安装 VLESS + REALITY
+4) 同时安装 AnyTLS、VLESS 和 Hysteria2
+5) 卸载
+6) 恢复最新备份
 ```
 
 也可以直接指定安装模式：
@@ -51,9 +50,6 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 
 # 只安装 Hysteria2 + Surge 端口跳跃
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode 2
-
-# 同时安装两个入站
-bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode both
 
 # 只安装 VLESS + REALITY
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode vless
@@ -84,13 +80,13 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 
 ```bash
 # 沿用旧配置，仅更新 sing-box
-bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode both --config keep
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode full --config keep
 
 # 卸载后恢复最近一次有效备份
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --restore
 
 # 备份旧配置后生成全新配置
-bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode both --config new
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode full --config new
 ```
 
 ---
@@ -273,7 +269,7 @@ bash install.sh
 带参数执行：
 
 ```bash
-bash install.sh --mode both -d www.microsoft.com --anytls-port 8443 --hy2-port 20000 --ports 20000-50000
+bash install.sh --mode full -d www.microsoft.com --anytls-port 8443 --vless-port auto --hy2-port 20000 --ports 20000-50000
 ```
 
 旧的单协议脚本仍然保留，方便兼容已有命令：
@@ -321,7 +317,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 
 | 参数 | 说明 | 默认值 |
 | --- | --- | --- |
-| `-m`, `--mode` | 操作模式：`1`/`anytls`、`2`/`hy2`、`3`/`both`、`4`/`uninstall`、`5`/`restore`、`6`/`vless`、`7`/`full` | 交互菜单 |
+| `-m`, `--mode` | 操作模式：`1`/`anytls`、`2`/`hy2`、`3`/`vless`、`4`/`full`、`5`/`uninstall`、`6`/`restore` | 交互菜单 |
 | `--restore` | 直接恢复最近一次有效备份 | 关闭 |
 | `--config` | 选择 `keep` 沿用当前配置、`restore` 恢复最近备份或 `new` 生成新配置 | 交互询问 |
 | `--uninstall` | 卸载范围：`anytls`、`vless`、`hy2` 或 `all` | 卸载子菜单 |

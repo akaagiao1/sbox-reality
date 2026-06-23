@@ -154,7 +154,6 @@ usage() {
   bash $0 --mode 1
   bash $0 --mode 2
   bash $0 --mode vless
-  bash $0 --mode both
   bash $0 --mode full
   bash $0 --restore
   bash $0 --uninstall anytls|vless|hy2|all
@@ -162,11 +161,10 @@ usage() {
 安装模式：
   1, anytls     安装 AnyTLS + REALITY
   2, hy2        安装 Hysteria2 + Surge 端口跳跃
-  3, both       在同一份 sing-box 配置中安装两者
-  6, vless      安装 VLESS + REALITY
-  7, full       同时安装 AnyTLS、VLESS 和 Hysteria2
-  4, uninstall  卸载一个或全部配置
-  5, restore    恢复最新的配置备份
+  3, vless      安装 VLESS + REALITY
+  4, full       同时安装 AnyTLS、VLESS 和 Hysteria2
+  5, uninstall  卸载一个或全部配置
+  6, restore    恢复最新的配置备份
 
 重新安装选项（检测到现有配置时显示）：
       --config keep    保留现有服务端/客户端配置，仅更新 sing-box
@@ -203,7 +201,7 @@ Hysteria2 + Surge 选项：
       --name          Surge 代理名称，默认：HY2
 
 通用选项：
-  -m, --mode          模式：1-7、anytls、vless、hy2、both、full、uninstall、restore
+  -m, --mode          模式：1-6、anytls、vless、hy2、full、uninstall、restore
   -p, --port          当前单协议模式的端口；同时安装时请分别使用各协议端口选项
   -h, --help          显示帮助
 
@@ -233,24 +231,20 @@ while [[ $# -gt 0 ]]; do
       INSTALL_MODE="2"
       shift
       ;;
-    6|vless|vless-reality)
-      INSTALL_MODE="6"
-      shift
-      ;;
-    3|both|all)
+    3|vless|vless-reality)
       INSTALL_MODE="3"
       shift
       ;;
-    7|full|all3|all-protocols)
-      INSTALL_MODE="7"
-      shift
-      ;;
-    4|uninstall|remove)
+    4|full|all|all3|all-protocols)
       INSTALL_MODE="4"
       shift
       ;;
-    5|restore|backup)
+    5|uninstall|remove)
       INSTALL_MODE="5"
+      shift
+      ;;
+    6|restore|backup)
+      INSTALL_MODE="6"
       shift
       ;;
     --restore)
@@ -385,16 +379,15 @@ choose_mode() {
     echo "请选择操作："
     echo "  1) 安装 AnyTLS + REALITY"
     echo "  2) 安装 Hysteria2 + Surge 端口跳跃"
-    echo "  3) 同时安装两者"
-    echo "  4) 卸载"
-    echo "  5) 恢复最新备份"
-    echo "  6) 安装 VLESS + REALITY"
-    echo "  7) 同时安装 AnyTLS、VLESS 和 Hysteria2"
+    echo "  3) 安装 VLESS + REALITY"
+    echo "  4) 同时安装 AnyTLS、VLESS 和 Hysteria2"
+    echo "  5) 卸载"
+    echo "  6) 恢复最新备份"
     echo
-    read -rp "请输入选项 [1-7]：" INSTALL_MODE
+    read -rp "请输入选项 [1-6]：" INSTALL_MODE
   else
     echo "错误：非交互模式下必须指定安装模式"
-    echo "示例：bash $0 --mode both"
+    echo "示例：bash $0 --mode full"
     exit 1
   fi
 }
@@ -411,22 +404,18 @@ normalize_mode() {
     2|hy2|hysteria2|surge)
       INSTALL_HY2=1
       ;;
-    6|vless|vless-reality)
+    3|vless|vless-reality)
       INSTALL_VLESS=1
       ;;
-    3|both|all)
-      INSTALL_ANYTLS=1
-      INSTALL_HY2=1
-      ;;
-    7|full|all3|all-protocols)
+    4|full|all|all3|all-protocols)
       INSTALL_ANYTLS=1
       INSTALL_VLESS=1
       INSTALL_HY2=1
       ;;
-    4|uninstall|remove)
+    5|uninstall|remove)
       ACTION="uninstall"
       ;;
-    5|restore|backup)
+    6|restore|backup)
       ACTION="restore"
       CONFIG_POLICY="restore"
       ;;
@@ -467,7 +456,7 @@ choose_uninstall_scope() {
     3|hy2|hysteria2|surge)
       UNINSTALL_SCOPE="hy2"
       ;;
-    4|both|full|all)
+    4|full|all)
       UNINSTALL_SCOPE="all"
       ;;
     *)
@@ -2064,7 +2053,7 @@ main() {
 
   if [[ $EUID -ne 0 ]]; then
     echo "错误：请使用 root 用户运行脚本"
-    echo "示例：sudo bash $0 --mode both"
+    echo "示例：sudo bash $0 --mode full"
     exit 1
   fi
 
