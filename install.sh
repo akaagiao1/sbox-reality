@@ -167,9 +167,10 @@ usage() {
   6, restore    恢复最新的配置备份
 
 重新安装选项（检测到现有配置时显示）：
+      --config merge   增量合并本次协议到现有配置（默认）
       --config keep    保留现有服务端/客户端配置，仅更新 sing-box
       --config restore 从 /root/sbox-reality-backups 恢复最新配置
-      --config new     备份现有配置并生成新配置
+      --config new     生成全新配置，不合并已有入站
 
 卸载选项：
       --uninstall      卸载范围：anytls、vless、hy2 或 all
@@ -989,15 +990,19 @@ find_latest_backup() {
 
 choose_config_policy() {
   case "$CONFIG_POLICY" in
-    ask|""|keep|restore|new)
+    ask|""|merge|keep|restore|new)
       ;;
     *)
-      echo "错误：--config 必须设置为 keep、restore 或 new"
+      echo "错误：--config 必须设置为 merge、keep、restore 或 new"
       exit 1
       ;;
   esac
 
   find_latest_backup
+
+  if [[ "$ACTION" == "install" && ( "$CONFIG_POLICY" == "ask" || -z "$CONFIG_POLICY" ) ]]; then
+    CONFIG_POLICY="merge"
+  fi
 
   if [[ ! -s "$SERVER_CONF" ]]; then
     if [[ "$CONFIG_POLICY" == "keep" ]]; then
@@ -1013,81 +1018,19 @@ choose_config_policy() {
       return 0
     fi
 
-    if [[ -n "$LATEST_BACKUP_DIR" && ( "$CONFIG_POLICY" == "ask" || -z "$CONFIG_POLICY" ) ]]; then
-      if [[ -t 0 ]]; then
-        echo
-        echo "发现以前的配置备份："
-        echo "  $LATEST_BACKUP_DIR"
-        echo "  1) 恢复此备份"
-        echo "  2) 忽略备份并生成新配置"
-        echo "  3) 取消"
-        echo
-        read -rp "请输入选项 [1-3]：" CONFIG_POLICY
-        case "$CONFIG_POLICY" in
-          1) CONFIG_POLICY="restore" ;;
-          2) CONFIG_POLICY="new" ;;
-          3) echo "已取消"; exit 0 ;;
-          *) echo "错误：无效选项"; exit 1 ;;
-        esac
-        return 0
-      fi
-
-      echo "错误：发现以前的配置备份：$LATEST_BACKUP_DIR"
-      echo "请使用 --config restore 恢复，或使用 --config new 忽略备份"
-      exit 1
-    fi
-
     CONFIG_POLICY="new"
     return 0
   fi
 
   case "$CONFIG_POLICY" in
-    keep|new|restore)
+    merge|keep|new|restore)
       if [[ "$CONFIG_POLICY" == "restore" && -z "$LATEST_BACKUP_DIR" ]]; then
         echo "错误：在 $BACKUP_ROOT 中未找到可恢复的配置"
         exit 1
       fi
       return 0
       ;;
-    ask|"")
-      ;;
   esac
-
-  if [[ -t 0 ]]; then
-    echo
-    echo "发现现有 sing-box 配置：$SERVER_CONF"
-    echo "  1) 保留并继续使用现有配置"
-    echo "  2) 备份现有配置并生成新配置"
-    if [[ -n "$LATEST_BACKUP_DIR" ]]; then
-      echo "  3) 恢复最新备份：$LATEST_BACKUP_DIR"
-      echo "  4) 取消"
-    else
-      echo "  3) 取消"
-    fi
-    echo
-    if [[ -n "$LATEST_BACKUP_DIR" ]]; then
-      read -rp "请输入选项 [1-4]：" CONFIG_POLICY
-      case "$CONFIG_POLICY" in
-        1) CONFIG_POLICY="keep" ;;
-        2) CONFIG_POLICY="new" ;;
-        3) CONFIG_POLICY="restore" ;;
-        4) echo "已取消"; exit 0 ;;
-        *) echo "错误：无效选项"; exit 1 ;;
-      esac
-    else
-      read -rp "请输入选项 [1-3]：" CONFIG_POLICY
-      case "$CONFIG_POLICY" in
-        1) CONFIG_POLICY="keep" ;;
-        2) CONFIG_POLICY="new" ;;
-        3) echo "已取消"; exit 0 ;;
-        *) echo "错误：无效选项"; exit 1 ;;
-      esac
-    fi
-  else
-    echo "错误：发现现有配置"
-    echo "请使用 --config keep、--config restore 或 --config new"
-    exit 1
-  fi
 }
 
 restore_file_from_backup() {
@@ -1212,7 +1155,6 @@ restore_latest_backup() {
 }
 
 reuse_existing_config() {
-  backup_existing_files "reinstall-keep"
   echo "保留现有配置；新模式和协议选项不会生效。"
   install_dependencies
 
@@ -1224,7 +1166,6 @@ reuse_existing_config() {
   echo
   echo "重新安装完成，现有配置和凭据已保留。"
   echo "  配置文件：$SERVER_CONF"
-  echo "  备份位置：$LAST_BACKUP_DIR"
 
   if [[ -f "$COMBINED_INFO" ]]; then
     echo
@@ -1705,7 +1646,7 @@ $(json_number_field "up_mbps" "$UP_MBPS")$(json_number_field "down_mbps" "$DOWN_
 JSON
 }
 
-write_server_config() {
+selected_inbounds_json() {
   local inbounds="" sep=""
 
   if (( INSTALL_ANYTLS )); then
@@ -1724,6 +1665,20 @@ $(vless_inbound_json)"
 $(hy2_inbound_json)"
   fi
 
+  cat << JSON
+[
+${inbounds}
+]
+JSON
+}
+
+write_fresh_server_config() {
+  local inbounds
+
+  inbounds="$(selected_inbounds_json)"
+  inbounds="${inbounds#[}"
+  inbounds="${inbounds%]}"
+
   cat > "$SERVER_CONF" << JSON
 {
   "log": {
@@ -1741,6 +1696,44 @@ ${inbounds}
   ]
 }
 JSON
+}
+
+write_server_config() {
+  local selected_file temp_config
+
+  if [[ "$CONFIG_POLICY" != "merge" || ! -s "$SERVER_CONF" ]]; then
+    write_fresh_server_config
+    return 0
+  fi
+
+  if ! jq -e . "$SERVER_CONF" >/dev/null; then
+    echo "错误：现有 $SERVER_CONF 不是有效 JSON，无法安全追加新协议"
+    echo "请修复配置，或使用 --config new 生成全新配置"
+    exit 1
+  fi
+
+  selected_file="$(mktemp)"
+  temp_config="$(mktemp)"
+  selected_inbounds_json > "$selected_file"
+
+  jq --slurpfile selected "$selected_file" '
+    ($selected[0] | map(.tag)) as $selected_tags
+    | .log = (.log // {"level": "info", "timestamp": true})
+    | .inbounds = (
+        [
+          (.inbounds // [])[]
+          | select((.tag // "") as $tag | ($selected_tags | index($tag) | not))
+        ] + $selected[0]
+      )
+    | .outbounds = (
+        if ((.outbounds // []) | length) > 0 then .outbounds
+        else [{"type": "direct", "tag": "direct"}]
+        end
+      )
+  ' "$SERVER_CONF" > "$temp_config"
+
+  install -m 600 "$temp_config" "$SERVER_CONF"
+  rm -f "$selected_file" "$temp_config"
 }
 
 detect_server_ip() {
@@ -1850,6 +1843,9 @@ SURGE
 
 write_info_files() {
   local port_service_config
+  local has_anytls=0
+  local has_vless=0
+  local has_hy2=0
 
   if [[ "$SERVICE_MANAGER" == "systemd" ]]; then
     port_service_config="$SYSTEMD_DROPIN"
@@ -1857,14 +1853,24 @@ write_info_files() {
     port_service_config="$OPENRC_PORT_SERVICE"
   fi
 
+  if jq -e '.inbounds[]? | select(.tag == "anytls-in")' "$SERVER_CONF" >/dev/null 2>&1; then
+    has_anytls=1
+  fi
+  if jq -e '.inbounds[]? | select(.tag == "vless-in")' "$SERVER_CONF" >/dev/null 2>&1; then
+    has_vless=1
+  fi
+  if jq -e '.inbounds[]? | select(.tag == "hy2-in")' "$SERVER_CONF" >/dev/null 2>&1; then
+    has_hy2=1
+  fi
+
   cat > "$COMBINED_INFO" << TXT
 sbox-reality 统一安装完成
 
 服务端：
   配置文件：$SERVER_CONF
-  已安装 AnyTLS + REALITY：$INSTALL_ANYTLS
-  已安装 VLESS + REALITY：$INSTALL_VLESS
-  已安装 Hysteria2 + Surge：$INSTALL_HY2
+  已安装 AnyTLS + REALITY：$has_anytls
+  已安装 VLESS + REALITY：$has_vless
+  已安装 Hysteria2 + Surge：$has_hy2
 TXT
 
   if (( INSTALL_ANYTLS )); then
@@ -1888,6 +1894,9 @@ AnyTLS + REALITY 安装完成
   公钥：$ANYTLS_PUBLIC_KEY
   Short ID：$ANYTLS_SHORT_ID
 TXT
+    cat "$ANYTLS_INFO" >> "$COMBINED_INFO"
+    printf '\n' >> "$COMBINED_INFO"
+  elif [[ -f "$ANYTLS_INFO" ]]; then
     cat "$ANYTLS_INFO" >> "$COMBINED_INFO"
     printf '\n' >> "$COMBINED_INFO"
   fi
@@ -1919,6 +1928,9 @@ $VLESS_SHARE_URL
   公钥：$VLESS_PUBLIC_KEY
   Short ID：$VLESS_SHORT_ID
 TXT
+    cat "$VLESS_INFO" >> "$COMBINED_INFO"
+    printf '\n' >> "$COMBINED_INFO"
+  elif [[ -f "$VLESS_INFO" ]]; then
     cat "$VLESS_INFO" >> "$COMBINED_INFO"
     printf '\n' >> "$COMBINED_INFO"
   fi
@@ -1981,6 +1993,9 @@ TXT
   请放行公共 UDP 端口：$NORMALIZED_HOP_PORTS
   如果本机防火墙在重定向后过滤流量，还需放行 UDP 监听端口：$HY2_PORT
 TXT
+    cat "$HY2_INFO" >> "$COMBINED_INFO"
+    printf '\n' >> "$COMBINED_INFO"
+  elif [[ -f "$HY2_INFO" ]]; then
     cat "$HY2_INFO" >> "$COMBINED_INFO"
     printf '\n' >> "$COMBINED_INFO"
   fi
@@ -2083,10 +2098,6 @@ main() {
     return 0
   fi
 
-  if [[ -s "$SERVER_CONF" ]]; then
-    backup_existing_files "reinstall-new"
-  fi
-
   prepare_inputs
 
   echo "sbox-reality 统一安装脚本"
@@ -2124,7 +2135,7 @@ main() {
     prepare_certificate
     generate_hy2_secrets
     write_port_hopping_helper
-  else
+  elif [[ "$CONFIG_POLICY" == "new" ]]; then
     disable_hy2_port_hopping
   fi
 

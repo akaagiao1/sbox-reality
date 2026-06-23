@@ -62,30 +62,30 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 
 ---
 
-## 重新安装与保留配置
+## 增量安装、重装与恢复
 
-服务器上已经存在 `/etc/sing-box/config.json` 时，脚本会询问保留旧配置还是生成新配置。卸载后即使当前配置已经删除，只要 `/root/sbox-reality-backups/` 中存在有效备份，脚本也会询问：
+服务器上已经存在 `/etc/sing-box/config.json` 时，脚本默认不再询问“保留旧配置还是生成新配置”，而是直接增量追加本次选择的协议。
 
-```text
-1) 恢复此备份
-2) 忽略备份并生成新配置
-3) 取消
-```
+例如先安装 `1`，再安装 `2`，之后再安装 `3`，最终会在同一份配置里依次保留 AnyTLS、Hysteria2 和 VLESS，不会覆盖前面已经安装的协议。
 
-- 恢复备份：还原服务端配置、端口、密码、密钥、客户端文件、证书和 HY2 端口跳跃配置，然后重新安装或更新 sing-box。
+- 增量安装：默认行为。保留已有入站，只新增或刷新本次选择的协议入站。
 - 保留当前配置：完整保留当前服务端配置和客户端文件，只更新 sing-box；本次输入的新协议参数不会覆盖旧配置。
-- 生成新配置：忽略旧备份，或者先备份当前配置，再生成全新配置。
+- 生成新配置：不合并已有入站，直接生成本次选择的协议配置。
+- 恢复备份：还原卸载前保存的服务端配置、端口、密码、密钥、客户端文件、证书和 HY2 端口跳跃配置。
 
 也可以直接指定，适合非交互执行：
 
 ```bash
+# 默认增量安装，不需要额外参数
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode vless
+
 # 沿用旧配置，仅更新 sing-box
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode full --config keep
 
 # 卸载后恢复最近一次有效备份
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --restore
 
-# 备份旧配置后生成全新配置
+# 生成全新配置，不合并已有入站
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode full --config new
 ```
 
@@ -93,7 +93,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 
 ## 卸载
 
-直接运行统一脚本并选择菜单 `4`，再选择只卸载 AnyTLS、只卸载 Hysteria2，或同时卸载两者：
+直接运行统一脚本并选择菜单 `5`，再选择只卸载 AnyTLS、只卸载 VLESS、只卸载 Hysteria2，或全部卸载：
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh)
@@ -105,17 +105,20 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 # 只卸载 AnyTLS + REALITY，保留 HY2
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --uninstall anytls
 
-# 只卸载 HY2 和端口跳跃规则，保留 AnyTLS
+# 只卸载 VLESS + REALITY，保留其他协议
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --uninstall vless
+
+# 只卸载 HY2 和端口跳跃规则，保留其他协议
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --uninstall hy2
 
-# 卸载两个配置，但保留 sing-box 程序
+# 卸载全部协议配置，但保留 sing-box 程序
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --uninstall all
 
-# 完整卸载两个配置并删除 sing-box 软件包
+# 完整卸载全部协议配置并删除 sing-box 软件包
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --uninstall all --purge
 ```
 
-卸载前会要求确认，并把现有配置备份到 `/root/sbox-reality-backups/`。卸载备份采用单份轮换，只保留最新的一份；如果服务器已经没有配置，则不会创建空备份，也不会删除已有的有效备份。非交互执行时可以增加 `--yes`。只卸载一个协议时，脚本只删除对应的 `anytls-in` 或 `hy2-in`，另一个协议会继续运行；卸载 HY2 还会清理端口跳跃规则以及 systemd/OpenRC 服务配置。
+卸载前会要求确认，并把现有配置备份到 `/root/sbox-reality-backups/`。卸载备份采用单份轮换，只保留最新的一份；如果服务器已经没有配置，则不会创建空备份，也不会删除已有的有效备份。非交互执行时可以增加 `--yes`。只卸载一个协议时，脚本只删除对应的 `anytls-in`、`vless-in` 或 `hy2-in`，其他协议会继续运行；卸载 HY2 还会清理端口跳跃规则以及 systemd/OpenRC 服务配置。
 
 ---
 
@@ -319,7 +322,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 | --- | --- | --- |
 | `-m`, `--mode` | 操作模式：`1`/`anytls`、`2`/`hy2`、`3`/`vless`、`4`/`full`、`5`/`uninstall`、`6`/`restore` | 交互菜单 |
 | `--restore` | 直接恢复最近一次有效备份 | 关闭 |
-| `--config` | 选择 `keep` 沿用当前配置、`restore` 恢复最近备份或 `new` 生成新配置 | 交互询问 |
+| `--config` | 选择 `merge` 增量合并、`keep` 沿用当前配置、`restore` 恢复最近备份或 `new` 生成新配置 | `merge` |
 | `--uninstall` | 卸载范围：`anytls`、`vless`、`hy2` 或 `all` | 卸载子菜单 |
 | `--purge` | 卸载全部配置时同时删除 sing-box 软件包 | 关闭 |
 | `-y`, `--yes` | 跳过卸载确认，适合非交互执行 | 关闭 |
