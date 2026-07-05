@@ -320,7 +320,7 @@ usage() {
   4, snell5     安装 Snell v5
   5, snell6     安装 Snell v6
   6, full       同时安装全部五种协议
-  7, uninstall  卸载一个或全部配置
+  7, uninstall  彻底卸载全部配置和 sing-box
   8, restore    恢复最新的配置备份
 
 重新安装选项（检测到现有配置时显示）：
@@ -572,7 +572,7 @@ choose_mode() {
     echo "  4) 安装 Snell v5"
     echo "  5) 安装 Snell v6"
     echo "  6) 同时安装全部五种协议"
-    echo "  7) 卸载"
+    echo "  7) 彻底卸载全部配置和 sing-box（保留备份）"
     echo "  8) 恢复最新备份"
     echo
     read -rp "请输入选项 [1-8]：" INSTALL_MODE
@@ -613,6 +613,8 @@ normalize_mode() {
       ;;
     7|uninstall|remove)
       ACTION="uninstall"
+      UNINSTALL_SCOPE="all"
+      PURGE_SING_BOX=1
       ;;
     8|restore|backup)
       ACTION="restore"

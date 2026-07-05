@@ -42,7 +42,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 4) 安装 Snell v5
 5) 安装 Snell v6
 6) 同时安装全部五种协议
-7) 卸载
+7) 彻底卸载全部配置和 sing-box（保留备份）
 8) 恢复最新备份
 ```
 
@@ -105,7 +105,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 
 ## 卸载
 
-直接运行统一脚本并选择菜单 `7`，再选择单个协议或全部卸载：
+直接运行统一脚本并选择菜单 `7`，默认执行与 `--uninstall all --purge` 相同的彻底卸载；确认后会清理全部配置和 sing-box，但始终保留备份目录：
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh)
