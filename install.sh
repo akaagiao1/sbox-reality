@@ -256,10 +256,50 @@ install_jq() {
 
 purge_sing_box_package() {
   if [[ "$PLATFORM" == "alpine" ]]; then
-    apk del sing-box
+    apk del sing-box >/dev/null 2>&1 || true
   else
-    apt purge -y sing-box
+    apt purge -y sing-box >/dev/null 2>&1 || true
   fi
+}
+
+cleanup_all_sing_box_configs() {
+  disable_hy2_port_hopping
+  service_disable
+  rm -rf \
+    /etc/sing-box \
+    /usr/local/etc/sing-box \
+    /var/lib/sing-box \
+    /var/log/sing-box \
+    "$OUTPUT_DIR"
+}
+
+cleanup_all_sing_box_installations() {
+  local detected_binary="$SING_BOX_BIN"
+  cleanup_all_sing_box_configs
+  purge_sing_box_package
+
+  pkill -x sing-box >/dev/null 2>&1 || true
+  rm -rf /opt/sing-box
+  rm -f \
+    /usr/bin/sing-box \
+    /usr/local/bin/sing-box \
+    /etc/init.d/sing-box \
+    /etc/cron.d/sing-box \
+    /etc/logrotate.d/sing-box \
+    /etc/systemd/system/sing-box.service \
+    /usr/lib/systemd/system/sing-box.service \
+    /lib/systemd/system/sing-box.service
+
+  if [[ -n "$detected_binary" && "$(basename "$detected_binary")" == "sing-box" \
+    && "$detected_binary" != "$BACKUP_ROOT"/* ]]; then
+    rm -f "$detected_binary"
+  fi
+
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    systemctl reset-failed sing-box.service >/dev/null 2>&1 || true
+  fi
+  SING_BOX_BIN=""
 }
 
 usage() {
@@ -1188,6 +1228,10 @@ backup_existing_files() {
     "$OPENRC_PORT_SERVICE"
     "$DEFAULT_CERT_PATH"
     "$DEFAULT_KEY_PATH"
+    "/etc/sing-box"
+    "/usr/local/etc/sing-box"
+    "/opt/sing-box"
+    "$OUTPUT_DIR"
   )
 
   backup_dir="${BACKUP_ROOT}/${reason}-$(date +%Y%m%d-%H%M%S)-$$"
@@ -1197,6 +1241,11 @@ backup_existing_files() {
   for source in "${sources[@]}"; do
     if [[ -f "$source" ]]; then
       cp -p "$source" "$backup_dir/$(basename "$source")"
+      copied=$(( copied + 1 ))
+    elif [[ -d "$source" ]]; then
+      local directory_name="external-${source#/}"
+      directory_name="${directory_name//\//__}"
+      cp -a "$source" "$backup_dir/$directory_name"
       copied=$(( copied + 1 ))
     fi
   done
@@ -1455,7 +1504,11 @@ confirm_uninstall() {
   echo
   echo "卸载范围：$UNINSTALL_SCOPE"
   if (( PURGE_SING_BOX )); then
-    echo "同时会移除 sing-box 软件包。"
+    echo "将彻底移除 sing-box 软件包、常见二进制、服务、配置、日志和定时任务。"
+    echo "备份目录 $BACKUP_ROOT 会保留。"
+  elif [[ "$UNINSTALL_SCOPE" == "all" ]]; then
+    echo "将删除全部 sing-box 配置和客户端文件，但保留 sing-box 程序。"
+    echo "备份目录 $BACKUP_ROOT 会保留。"
   else
     echo "将保留 sing-box 软件包。"
   fi
@@ -1551,59 +1604,65 @@ uninstall_selected() {
 
   confirm_uninstall
 
+  backup_existing_files "uninstall-${UNINSTALL_SCOPE}"
+  if [[ -n "$LAST_BACKUP_DIR" ]]; then
+    prune_backups_except "$LAST_BACKUP_DIR"
+    backup_status="$LAST_BACKUP_DIR"
+  fi
+
   if [[ -s "$SERVER_CONF" ]]; then
     if ! command -v jq >/dev/null 2>&1; then
       echo "正在安装 jq，以安全编辑 JSON 配置……"
       install_jq
     fi
 
-    if ! jq -e . "$SERVER_CONF" >/dev/null; then
+    if [[ "$UNINSTALL_SCOPE" == "all" ]]; then
+      if jq -e . "$SERVER_CONF" >/dev/null 2>&1; then
+        matched="$(jq '(.inbounds // []) | length' "$SERVER_CONF")"
+      fi
+      service_disable
+      rm -f "$SERVER_CONF"
+    elif ! jq -e . "$SERVER_CONF" >/dev/null; then
       echo "错误：$SERVER_CONF 不是有效的 JSON，服务端配置未作更改"
       exit 1
-    fi
-
-    backup_existing_files "uninstall-${UNINSTALL_SCOPE}"
-    if [[ -n "$LAST_BACKUP_DIR" ]]; then
-      prune_backups_except "$LAST_BACKUP_DIR"
-      backup_status="$LAST_BACKUP_DIR"
-    fi
-
-    matched="$(jq --argjson remove_anytls "$remove_anytls" --argjson remove_vless "$remove_vless" --argjson remove_hy2 "$remove_hy2" --argjson remove_snell5 "$remove_snell5" --argjson remove_snell6 "$remove_snell6" '
-      [(.inbounds // [])[]
-        | select(
-            (($remove_anytls == true) and (.tag == "anytls-in"))
-            or (($remove_vless == true) and (.tag == "vless-in"))
-            or (($remove_hy2 == true) and (.tag == "hy2-in"))
-            or (($remove_snell5 == true) and (.tag == "snell5-in"))
-            or (($remove_snell6 == true) and (.tag == "snell6-in"))
-          )
-      ] | length
-    ' "$SERVER_CONF")"
-
-    if (( matched > 0 )); then
-      temp_config="$(mktemp)"
-      jq --argjson remove_anytls "$remove_anytls" --argjson remove_vless "$remove_vless" --argjson remove_hy2 "$remove_hy2" --argjson remove_snell5 "$remove_snell5" --argjson remove_snell6 "$remove_snell6" '
-        .inbounds = [
-          (.inbounds // [])[]
+    else
+      matched="$(jq --argjson remove_anytls "$remove_anytls" --argjson remove_vless "$remove_vless" --argjson remove_hy2 "$remove_hy2" --argjson remove_snell5 "$remove_snell5" --argjson remove_snell6 "$remove_snell6" '
+        [(.inbounds // [])[]
           | select(
-              (($remove_anytls == false) or (.tag != "anytls-in"))
-              and (($remove_vless == false) or (.tag != "vless-in"))
-              and (($remove_hy2 == false) or (.tag != "hy2-in"))
-              and (($remove_snell5 == false) or (.tag != "snell5-in"))
-              and (($remove_snell6 == false) or (.tag != "snell6-in"))
+              (($remove_anytls == true) and (.tag == "anytls-in"))
+              or (($remove_vless == true) and (.tag == "vless-in"))
+              or (($remove_hy2 == true) and (.tag == "hy2-in"))
+              or (($remove_snell5 == true) and (.tag == "snell5-in"))
+              or (($remove_snell6 == true) and (.tag == "snell6-in"))
             )
-        ]
-      ' "$SERVER_CONF" > "$temp_config"
-      remaining="$(jq '(.inbounds // []) | length' "$temp_config")"
+        ] | length
+      ' "$SERVER_CONF")"
 
-      if (( remaining > 0 )); then
-        run_sing_box check -c "$temp_config"
-        install -m 600 "$temp_config" "$SERVER_CONF"
-      else
-        service_disable
-        rm -f "$SERVER_CONF"
+      if (( matched > 0 )); then
+        temp_config="$(mktemp)"
+        jq --argjson remove_anytls "$remove_anytls" --argjson remove_vless "$remove_vless" --argjson remove_hy2 "$remove_hy2" --argjson remove_snell5 "$remove_snell5" --argjson remove_snell6 "$remove_snell6" '
+          .inbounds = [
+            (.inbounds // [])[]
+            | select(
+                (($remove_anytls == false) or (.tag != "anytls-in"))
+                and (($remove_vless == false) or (.tag != "vless-in"))
+                and (($remove_hy2 == false) or (.tag != "hy2-in"))
+                and (($remove_snell5 == false) or (.tag != "snell5-in"))
+                and (($remove_snell6 == false) or (.tag != "snell6-in"))
+              )
+          ]
+        ' "$SERVER_CONF" > "$temp_config"
+        remaining="$(jq '(.inbounds // []) | length' "$temp_config")"
+
+        if (( remaining > 0 )); then
+          run_sing_box check -c "$temp_config"
+          install -m 600 "$temp_config" "$SERVER_CONF"
+        else
+          service_disable
+          rm -f "$SERVER_CONF"
+        fi
+        rm -f "$temp_config"
       fi
-      rm -f "$temp_config"
     fi
   else
     find_latest_backup
@@ -1636,15 +1695,12 @@ uninstall_selected() {
     service_restart
   fi
 
-  if (( PURGE_SING_BOX )); then
-    if [[ -s "$SERVER_CONF" ]] && command -v jq >/dev/null 2>&1 \
-      && (( $(jq '(.inbounds // []) | length' "$SERVER_CONF") > 0 )); then
-      echo "错误：仍有其他 sing-box 入站，因此未移除软件包"
-      echo "配置备份：$backup_status"
-      exit 1
+  if [[ "$UNINSTALL_SCOPE" == "all" ]]; then
+    if (( PURGE_SING_BOX )); then
+      cleanup_all_sing_box_installations
+    else
+      cleanup_all_sing_box_configs
     fi
-    service_disable
-    purge_sing_box_package
   fi
 
   echo

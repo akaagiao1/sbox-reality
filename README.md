@@ -134,7 +134,11 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --uninstall all --purge
 ```
 
-卸载前会要求确认，并把现有配置备份到 `/root/sbox-reality-backups/`。卸载备份采用单份轮换，只保留最新的一份；如果服务器已经没有配置，则不会创建空备份，也不会删除已有的有效备份。非交互执行时可以增加 `--yes`。只卸载一个协议时，脚本只删除对应的 `anytls-in`、`vless-in` 或 `hy2-in`，其他协议会继续运行；卸载 HY2 还会清理端口跳跃规则以及 systemd/OpenRC 服务配置。
+卸载前会要求确认，并把现有配置备份到 `/root/sbox-reality-backups/`。卸载备份采用单份轮换，只保留最新的一份；如果服务器已经没有配置，则不会创建空备份，也不会删除已有的有效备份。非交互执行时可以增加 `--yes`。
+
+只卸载一个协议时，脚本先备份完整配置，再只删除对应的 `anytls-in`、`vless-in`、`hy2-in`、`snell5-in` 或 `snell6-in`，其他入站会继续运行。选择 `all` 时不再依赖入站 tag，而是备份后直接删除全部 sing-box 配置目录和客户端文件。
+
+使用 `--uninstall all --purge` 时还会清理其他脚本常用的 sing-box 安装位置，包括 `/usr/bin/sing-box`、`/usr/local/bin/sing-box`、`/opt/sing-box`、systemd/OpenRC 服务、配置目录、运行数据、日志、cron 和 logrotate 文件。备份目录 `/root/sbox-reality-backups/` 明确排除，始终保留。脚本不会执行危险的全盘模糊删除，避免误删名称中偶然包含 `sing-box` 的个人文件。
 
 ---
 
