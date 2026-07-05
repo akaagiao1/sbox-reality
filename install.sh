@@ -105,6 +105,7 @@ LAST_BACKUP_DIR=""
 LATEST_BACKUP_DIR=""
 PLATFORM=""
 SERVICE_MANAGER=""
+SING_BOX_BIN=""
 
 detect_platform() {
   if [[ -f /etc/alpine-release ]] && command -v apk >/dev/null 2>&1; then
@@ -117,6 +118,67 @@ detect_platform() {
     echo "错误：本脚本仅支持 Debian、Ubuntu 和 Alpine Linux"
     exit 1
   fi
+}
+
+resolve_sing_box_binary() {
+  local candidate resolved=""
+  local -a candidates=("/usr/bin/sing-box" "/usr/local/bin/sing-box")
+
+  if command -v sing-box >/dev/null 2>&1; then
+    candidates+=("$(command -v sing-box)")
+  fi
+
+  for candidate in "${candidates[@]}"; do
+    [[ -x "$candidate" ]] || continue
+    resolved="$(cd "$(dirname "$candidate")" && pwd -P)/$(basename "$candidate")"
+    if "$resolved" version >/dev/null 2>&1; then
+      SING_BOX_BIN="$resolved"
+      return 0
+    fi
+  done
+
+  SING_BOX_BIN=""
+  return 1
+}
+
+run_sing_box() {
+  [[ -n "$SING_BOX_BIN" ]] || resolve_sing_box_binary || {
+    echo "错误：找不到可用的 sing-box 二进制" >&2
+    return 127
+  }
+  "$SING_BOX_BIN" "$@"
+}
+
+verify_snell_support() {
+  local test_config test_output
+  (( INSTALL_SNELL5 || INSTALL_SNELL6 )) || return 0
+
+  test_config="$(mktemp)"
+  cat > "$test_config" << JSON
+{
+  "inbounds": [
+    {
+      "type": "snell",
+      "tag": "snell-capability-test",
+      "listen": "127.0.0.1",
+      "listen_port": 1,
+      "version": 6,
+      "psk": "snell-test-password"
+    }
+  ],
+  "outbounds": [{"type": "direct", "tag": "direct"}]
+}
+JSON
+
+  if ! test_output="$(run_sing_box check -c "$test_config" 2>&1)"; then
+    rm -f "$test_config"
+    echo "错误：当前实际调用的 sing-box 不支持 Snell：$SING_BOX_BIN"
+    run_sing_box version || true
+    echo "$test_output"
+    echo "请检查是否存在覆盖 /usr/bin/sing-box 的旧版 /usr/local/bin/sing-box。"
+    exit 1
+  fi
+  rm -f "$test_config"
 }
 
 prepare_output_dir() {
@@ -1284,7 +1346,7 @@ restore_latest_backup() {
       || rc-service sing-box-hy2-port-hopping start
   fi
 
-  if ! sing-box check -c "$SERVER_CONF"; then
+  if ! run_sing_box check -c "$SERVER_CONF"; then
     echo "错误：文件已恢复，但未通过 sing-box 配置验证"
     echo "服务已保持停止状态。备份位置：$LATEST_BACKUP_DIR"
     exit 1
@@ -1308,7 +1370,7 @@ reuse_existing_config() {
   echo "保留现有配置；新模式和协议选项不会生效。"
   install_dependencies
 
-  sing-box check -c "$SERVER_CONF"
+  run_sing_box check -c "$SERVER_CONF"
   service_reload
   service_enable
   service_restart
@@ -1476,7 +1538,7 @@ uninstall_selected() {
       remaining="$(jq '(.inbounds // []) | length' "$temp_config")"
 
       if (( remaining > 0 )); then
-        sing-box check -c "$temp_config"
+        run_sing_box check -c "$temp_config"
         install -m 600 "$temp_config" "$SERVER_CONF"
       else
         service_disable
@@ -1763,7 +1825,8 @@ install_dependencies() {
       sleep 3
     fi
   done
-  if (( ! installed )) || ! command -v sing-box >/dev/null 2>&1; then
+  hash -r
+  if (( ! installed )) || ! resolve_sing_box_binary; then
     echo "错误：sing-box v${alpha_version} 安装失败，请稍后重试"
     exit 1
   fi
@@ -1773,7 +1836,7 @@ install_dependencies() {
 generate_anytls_secrets() {
   local keypair
 
-  keypair="$(sing-box generate reality-keypair)"
+  keypair="$(run_sing_box generate reality-keypair)"
   ANYTLS_PRIVATE_KEY="$(echo "$keypair" | awk -F': ' '/PrivateKey/ {print $2}')"
   ANYTLS_PUBLIC_KEY="$(echo "$keypair" | awk -F': ' '/PublicKey/ {print $2}')"
   ANYTLS_PASSWORD="$(openssl rand -base64 32 | tr -d '\n')"
@@ -1788,10 +1851,10 @@ generate_anytls_secrets() {
 generate_vless_secrets() {
   local keypair
 
-  keypair="$(sing-box generate reality-keypair)"
+  keypair="$(run_sing_box generate reality-keypair)"
   VLESS_PRIVATE_KEY="$(echo "$keypair" | awk -F': ' '/PrivateKey/ {print $2}')"
   VLESS_PUBLIC_KEY="$(echo "$keypair" | awk -F': ' '/PublicKey/ {print $2}')"
-  VLESS_UUID="$(sing-box generate uuid)"
+  VLESS_UUID="$(run_sing_box generate uuid)"
   VLESS_SHORT_ID="$(openssl rand -hex 8)"
 
   if [[ -z "$VLESS_PRIVATE_KEY" || -z "$VLESS_PUBLIC_KEY" || -z "$VLESS_UUID" || -z "$VLESS_SHORT_ID" ]]; then
@@ -2544,6 +2607,7 @@ main() {
 
   detect_platform
   prepare_output_dir
+  resolve_sing_box_binary || true
 
   if [[ "$ACTION" == "uninstall" ]]; then
     uninstall_selected
@@ -2603,6 +2667,7 @@ main() {
   echo
 
   install_dependencies
+  verify_snell_support
 
   if (( INSTALL_ANYTLS )); then
     generate_anytls_secrets
@@ -2641,7 +2706,7 @@ main() {
     write_snell_clients
   fi
 
-  sing-box check -c "$SERVER_CONF"
+  run_sing_box check -c "$SERVER_CONF"
   service_reload
   service_enable
   service_restart
