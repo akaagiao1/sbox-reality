@@ -586,6 +586,65 @@ normalize_mode() {
   esac
 }
 
+choose_protocol_port() {
+  local label="$1"
+  local variable_name="$2"
+  local transport="$3"
+  local current_value choice custom_port
+
+  [[ -t 0 ]] || return 0
+  current_value="${!variable_name}"
+  if [[ -n "$current_value" && "$current_value" != "auto" && "$current_value" != "random" ]]; then
+    return 0
+  fi
+
+  echo
+  echo "$label 端口设置："
+  echo "  1) 自动选择高端口（默认）"
+  echo "  2) 自定义端口"
+  read -rp "请选择 [1]：" choice
+  choice="${choice:-1}"
+
+  case "$choice" in
+    1)
+      printf -v "$variable_name" '%s' "auto"
+      ;;
+    2)
+      while true; do
+        read -rp "请输入 $label 端口 [1-65535]：" custom_port
+        if validate_port "$custom_port"; then
+          if [[ "$transport" == "udp" ]] && is_udp_port_in_use_by_other "$custom_port"; then
+            echo "端口 $custom_port/UDP 已被占用，请使用其他端口"
+            continue
+          fi
+          if [[ "$transport" == "tcp" ]] && is_tcp_port_in_use_by_other "$custom_port"; then
+            echo "端口 $custom_port/TCP 已被占用，请使用其他端口"
+            continue
+          fi
+          printf -v "$variable_name" '%s' "$custom_port"
+          break
+        fi
+        echo "错误：端口必须是 1-65535 之间的整数"
+      done
+      ;;
+    *)
+      echo "错误：无效的端口选项：$choice"
+      exit 1
+      ;;
+  esac
+}
+
+choose_install_ports() {
+  [[ "$ACTION" == "install" ]] || return 0
+
+  (( INSTALL_ANYTLS )) && choose_protocol_port "AnyTLS" "ANYTLS_PORT" "tcp"
+  (( INSTALL_HY2 )) && choose_protocol_port "Hysteria2 实际监听" "HY2_PORT" "udp"
+  (( INSTALL_VLESS )) && choose_protocol_port "VLESS" "VLESS_PORT" "tcp"
+  (( INSTALL_SNELL5 )) && choose_protocol_port "Snell v5" "SNELL5_PORT" "tcp"
+  (( INSTALL_SNELL6 )) && choose_protocol_port "Snell v6" "SNELL6_PORT" "tcp"
+  return 0
+}
+
 choose_uninstall_scope() {
   [[ "$ACTION" == "uninstall" ]] || return 0
 
@@ -2633,6 +2692,7 @@ main() {
     return 0
   fi
 
+  choose_install_ports
   prepare_inputs
 
   echo "sbox-reality 统一安装脚本"

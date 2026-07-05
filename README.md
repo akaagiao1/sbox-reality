@@ -46,6 +46,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 8) 恢复最新备份
 ```
 
+选择安装协议后，脚本还会询问端口方式：输入 `1` 或直接回车自动选择未占用的高端口；输入 `2` 可手动填写 NAT 机器映射给你的自定义端口。自定义端口已被占用时会提示改用其他端口；一次安装多个协议时会分别询问各协议端口。
+
 也可以直接指定安装模式：
 
 ```bash
