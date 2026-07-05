@@ -7,6 +7,8 @@
 - **AnyTLS + REALITY**
 - **VLESS + REALITY**
 - **Hysteria2 + Surge 端口跳跃**
+- **Snell v5（Surge）**
+- **Snell v6（Surge Beta）**
 - **同时安装多个入站到同一个 sing-box 配置**
 - **按协议卸载、保留配置重装或生成全新配置**
 
@@ -37,9 +39,11 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 1) 安装 AnyTLS + REALITY
 2) 安装 Hysteria2 + Surge 端口跳跃
 3) 安装 VLESS + REALITY
-4) 同时安装 AnyTLS、VLESS 和 Hysteria2
-5) 卸载
-6) 恢复最新备份
+4) 安装 Snell v5
+5) 安装 Snell v6
+6) 同时安装全部五种协议
+7) 卸载
+8) 恢复最新备份
 ```
 
 也可以直接指定安装模式：
@@ -54,7 +58,13 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 # 只安装 VLESS + REALITY
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode vless
 
-# 同时安装三个入站
+# 只安装 Snell v5
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode snell5
+
+# 只安装 Snell v6
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode snell6
+
+# 同时安装全部五个入站
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode full
 ```
 
@@ -93,7 +103,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 
 ## 卸载
 
-直接运行统一脚本并选择菜单 `5`，再选择只卸载 AnyTLS、只卸载 VLESS、只卸载 Hysteria2，或全部卸载：
+直接运行统一脚本并选择菜单 `7`，再选择单个协议或全部卸载：
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh)
@@ -111,6 +121,10 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 # 只卸载 HY2 和端口跳跃规则，保留其他协议
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --uninstall hy2
 
+# 只卸载 Snell v5 或 Snell v6
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --uninstall snell5
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --uninstall snell6
+
 # 卸载全部协议配置，但保留 sing-box 程序
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --uninstall all
 
@@ -119,6 +133,24 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 ```
 
 卸载前会要求确认，并把现有配置备份到 `/root/sbox-reality-backups/`。卸载备份采用单份轮换，只保留最新的一份；如果服务器已经没有配置，则不会创建空备份，也不会删除已有的有效备份。非交互执行时可以增加 `--yes`。只卸载一个协议时，脚本只删除对应的 `anytls-in`、`vless-in` 或 `hy2-in`，其他协议会继续运行；卸载 HY2 还会清理端口跳跃规则以及 systemd/OpenRC 服务配置。
+
+---
+
+## Snell v5 / v6
+
+脚本使用 sing-box 1.14 最新 alpha 版提供 Snell 服务端，两个版本均默认选择未占用的随机 TCP 高端口，并生成 Surge 配置片段：
+
+```bash
+# Snell v5
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode snell5
+
+# Snell v6（需要支持 v6 的 Surge Beta）
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode snell6
+```
+
+可用参数：`--snell5-port`、`--snell6-port`、`--snell5-obfs none|http`、`--snell6-mode default|unshaped|unsafe-raw`。v6 默认使用安全的 `default` 流量整形模式；不要在公网使用明文的 `unsafe-raw`。
+
+所有客户端文件统一保存在 `/root/sing-box/`。sing-box 的 Snell v5 不包含官方 v5 QUIC Proxy，Surge 中的普通 TCP Snell 可以正常使用。
 
 ---
 
@@ -378,61 +410,66 @@ Hysteria2 + Surge 参数：
 
 ## 文件输出
 
-安装完成后会生成：
+所有客户端输出统一保存在权限为 `700` 的 `/root/sing-box/` 目录。每种协议都会生成 sing-box JSON、URL 文件、Surge 文件和安装信息：
 
 ```text
 服务端配置：/etc/sing-box/config.json
-统一安装信息：/root/sbox-reality-info.txt
-客户端 outbounds：/root/client-outbounds-anytls-reality.json
-安装信息：/root/anytls-reality-info.txt
+统一安装信息：/root/sing-box/all-info.txt
+sing-box：/root/sing-box/anytls-sing-box.json
+URL：/root/sing-box/anytls-url.txt
+Surge 兼容性说明：/root/sing-box/anytls-surge.conf
+安装信息：/root/sing-box/anytls-info.txt
 ```
 
 VLESS + REALITY 会生成：
 
 ```text
 服务端配置：/etc/sing-box/config.json
-sing-box 客户端 outbounds：/root/client-outbounds-vless-reality.json
-VLESS 分享链接：/root/vless-reality-url.txt
-安装信息：/root/vless-reality-info.txt
+sing-box：/root/sing-box/vless-sing-box.json
+URL：/root/sing-box/vless-url.txt
+Surge 兼容性说明：/root/sing-box/vless-surge.conf
+安装信息：/root/sing-box/vless-info.txt
 ```
 
 Hysteria2 + Surge 脚本会生成：
 
 ```text
 服务端配置：/etc/sing-box/config.json
-sing-box 客户端 outbounds：/root/client-outbounds-hysteria2.json
-Hysteria2 URL：/root/hysteria2-url.txt
-Surge 配置片段：/root/surge-hysteria2.conf
-安装信息：/root/hysteria2-surge-info.txt
+sing-box：/root/sing-box/hysteria2-sing-box.json
+URL：/root/sing-box/hysteria2-url.txt
+Surge：/root/sing-box/hysteria2-surge.conf
+安装信息：/root/sing-box/hysteria2-info.txt
 端口跳跃 helper：/usr/local/bin/sing-box-hy2-port-hopping
 端口跳跃 systemd drop-in（Debian/Ubuntu）：/etc/systemd/system/sing-box.service.d/10-hy2-port-hopping.conf
 端口跳跃 OpenRC 服务（Alpine）：/etc/init.d/sing-box-hy2-port-hopping
 ```
 
-`/root/hysteria2-surge-info.txt` 中会同时保存可直接复制到 Surge 的完整 `HY2=hysteria2,...` 代理配置。
+Snell v5/v6 分别生成 `snell-v5-*` 和 `snell-v6-*` 文件；其中 `*-sing-box.json`、`*-url.txt`、`*-surge.conf` 对应三种格式。Snell 没有官方统一 URL 标准，因此 URL 文件使用常见约定格式。
+
+Surge 官方不支持 VLESS + REALITY，也不支持 AnyTLS 的 REALITY 扩展，所以这两种协议的 `*-surge.conf` 会保存明确的兼容性说明，不会生成无法连接的假配置。
 
 查看客户端 `outbounds`：
 
 ```bash
-cat /root/client-outbounds-anytls-reality.json
+cat /root/sing-box/anytls-sing-box.json
 ```
 
 查看 VLESS 分享链接：
 
 ```bash
-cat /root/vless-reality-url.txt
+cat /root/sing-box/vless-url.txt
 ```
 
 查看 Surge 片段：
 
 ```bash
-cat /root/surge-hysteria2.conf
+cat /root/sing-box/hysteria2-surge.conf
 ```
 
 查看 Hysteria2 URL：
 
 ```bash
-cat /root/hysteria2-url.txt
+cat /root/sing-box/hysteria2-url.txt
 ```
 
 客户端输出只包含：
@@ -503,7 +540,7 @@ sing-box check -c /etc/sing-box/config.json
 查看生成的信息：
 
 ```bash
-cat /root/sbox-reality-info.txt
+cat /root/sing-box/all-info.txt
 ```
 
 ---
@@ -557,7 +594,7 @@ short_id
 所以客户端必须同步更新为最新生成的：
 
 ```bash
-/root/client-outbounds-anytls-reality.json
+/root/sing-box/anytls-sing-box.json
 ```
 
 ---

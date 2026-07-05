@@ -13,6 +13,10 @@ REALITY_DOMAIN="${REALITY_DOMAIN:-${DOMAIN:-www.apple.com}}"
 ANYTLS_PORT="${ANYTLS_PORT:-auto}"
 VLESS_DOMAIN="${VLESS_DOMAIN:-${REALITY_DOMAIN}}"
 VLESS_PORT="${VLESS_PORT:-auto}"
+SNELL5_PORT="${SNELL5_PORT:-auto}"
+SNELL6_PORT="${SNELL6_PORT:-auto}"
+SNELL5_OBFS_MODE="${SNELL5_OBFS_MODE:-none}"
+SNELL6_MODE="${SNELL6_MODE:-default}"
 HIGH_PORT_MIN="${HIGH_PORT_MIN:-20000}"
 HIGH_PORT_MAX="${HIGH_PORT_MAX:-65535}"
 
@@ -29,16 +33,29 @@ GECKO_MAX_PACKET_SIZE="${GECKO_MAX_PACKET_SIZE:-1200}"
 PROXY_NAME="${PROXY_NAME:-HY2}"
 
 SERVER_CONF="/etc/sing-box/config.json"
-ANYTLS_CLIENT_OUT="/root/client-outbounds-anytls-reality.json"
-VLESS_CLIENT_OUT="/root/client-outbounds-vless-reality.json"
-VLESS_URL_FILE="/root/vless-reality-url.txt"
-HY2_CLIENT_OUT="/root/client-outbounds-hysteria2.json"
-SURGE_CONF="/root/surge-hysteria2.conf"
-HY2_URL_FILE="/root/hysteria2-url.txt"
-ANYTLS_INFO="/root/anytls-reality-info.txt"
-VLESS_INFO="/root/vless-reality-info.txt"
-HY2_INFO="/root/hysteria2-surge-info.txt"
-COMBINED_INFO="/root/sbox-reality-info.txt"
+OUTPUT_DIR="/root/sing-box"
+ANYTLS_CLIENT_OUT="$OUTPUT_DIR/anytls-sing-box.json"
+ANYTLS_URL_FILE="$OUTPUT_DIR/anytls-url.txt"
+ANYTLS_SURGE_CONF="$OUTPUT_DIR/anytls-surge.conf"
+VLESS_CLIENT_OUT="$OUTPUT_DIR/vless-sing-box.json"
+VLESS_URL_FILE="$OUTPUT_DIR/vless-url.txt"
+VLESS_SURGE_CONF="$OUTPUT_DIR/vless-surge.conf"
+HY2_CLIENT_OUT="$OUTPUT_DIR/hysteria2-sing-box.json"
+SURGE_CONF="$OUTPUT_DIR/hysteria2-surge.conf"
+HY2_URL_FILE="$OUTPUT_DIR/hysteria2-url.txt"
+SNELL5_CLIENT_OUT="$OUTPUT_DIR/snell-v5-sing-box.json"
+SNELL5_URL_FILE="$OUTPUT_DIR/snell-v5-url.txt"
+SNELL5_SURGE_CONF="$OUTPUT_DIR/snell-v5-surge.conf"
+SNELL6_CLIENT_OUT="$OUTPUT_DIR/snell-v6-sing-box.json"
+SNELL6_URL_FILE="$OUTPUT_DIR/snell-v6-url.txt"
+SNELL6_SURGE_CONF="$OUTPUT_DIR/snell-v6-surge.conf"
+ANYTLS_INFO="$OUTPUT_DIR/anytls-info.txt"
+VLESS_INFO="$OUTPUT_DIR/vless-info.txt"
+HY2_INFO="$OUTPUT_DIR/hysteria2-info.txt"
+SNELL5_INFO="$OUTPUT_DIR/snell-v5-info.txt"
+SNELL6_INFO="$OUTPUT_DIR/snell-v6-info.txt"
+SNELL_SURGE_CONF="$OUTPUT_DIR/snell-surge.conf"
+COMBINED_INFO="$OUTPUT_DIR/all-info.txt"
 BACKUP_ROOT="/root/sbox-reality-backups"
 
 PORT_ENV="/etc/sing-box/hy2-port-hopping.env"
@@ -53,9 +70,13 @@ KEY_PATH="${KEY_PATH:-$DEFAULT_KEY_PATH}"
 INSTALL_ANYTLS=0
 INSTALL_VLESS=0
 INSTALL_HY2=0
+INSTALL_SNELL5=0
+INSTALL_SNELL6=0
 ANYTLS_PORT_MODE=""
 VLESS_PORT_MODE=""
 HY2_PORT_MODE=""
+SNELL5_PORT_MODE=""
+SNELL6_PORT_MODE=""
 FIRST_HOP_PORT=""
 NORMALIZED_HOP_PORTS=""
 SERVER_PORTS_JSON=""
@@ -65,6 +86,7 @@ ANYTLS_PRIVATE_KEY=""
 ANYTLS_PUBLIC_KEY=""
 ANYTLS_PASSWORD=""
 ANYTLS_SHORT_ID=""
+ANYTLS_SHARE_URL=""
 VLESS_PRIVATE_KEY=""
 VLESS_PUBLIC_KEY=""
 VLESS_UUID=""
@@ -73,6 +95,12 @@ VLESS_SHARE_URL=""
 HY2_PASSWORD=""
 HY2_SHARE_URL=""
 SURGE_PROXY_LINE=""
+SNELL5_PSK=""
+SNELL6_PSK=""
+SNELL5_SURGE_LINE=""
+SNELL6_SURGE_LINE=""
+SNELL5_SHARE_URL=""
+SNELL6_SHARE_URL=""
 LAST_BACKUP_DIR=""
 LATEST_BACKUP_DIR=""
 PLATFORM=""
@@ -89,6 +117,31 @@ detect_platform() {
     echo "错误：本脚本仅支持 Debian、Ubuntu 和 Alpine Linux"
     exit 1
   fi
+}
+
+prepare_output_dir() {
+  local old new
+  mkdir -p "$OUTPUT_DIR"
+  chmod 700 "$OUTPUT_DIR"
+
+  while IFS='|' read -r old new; do
+    [[ -f "$old" && ! -e "$new" ]] || continue
+    mv "$old" "$new"
+  done << MIGRATE
+/root/client-outbounds-anytls-reality.json|$ANYTLS_CLIENT_OUT
+/root/client-outbounds-vless-reality.json|$VLESS_CLIENT_OUT
+/root/vless-reality-url.txt|$VLESS_URL_FILE
+/root/client-outbounds-hysteria2.json|$HY2_CLIENT_OUT
+/root/surge-hysteria2.conf|$SURGE_CONF
+/root/hysteria2-url.txt|$HY2_URL_FILE
+/root/anytls-reality-info.txt|$ANYTLS_INFO
+/root/vless-reality-info.txt|$VLESS_INFO
+/root/hysteria2-surge-info.txt|$HY2_INFO
+/root/snell-v5-surge-info.txt|$SNELL5_INFO
+/root/snell-v6-surge-info.txt|$SNELL6_INFO
+/root/surge-snell.conf|$SNELL_SURGE_CONF
+/root/sbox-reality-info.txt|$COMBINED_INFO
+MIGRATE
 }
 
 service_reload() {
@@ -156,15 +209,17 @@ usage() {
   bash $0 --mode vless
   bash $0 --mode full
   bash $0 --restore
-  bash $0 --uninstall anytls|vless|hy2|all
+  bash $0 --uninstall anytls|vless|hy2|snell5|snell6|all
 
 安装模式：
   1, anytls     安装 AnyTLS + REALITY
   2, hy2        安装 Hysteria2 + Surge 端口跳跃
   3, vless      安装 VLESS + REALITY
-  4, full       同时安装 AnyTLS、VLESS 和 Hysteria2
-  5, uninstall  卸载一个或全部配置
-  6, restore    恢复最新的配置备份
+  4, snell5     安装 Snell v5
+  5, snell6     安装 Snell v6
+  6, full       同时安装全部五种协议
+  7, uninstall  卸载一个或全部配置
+  8, restore    恢复最新的配置备份
 
 重新安装选项（检测到现有配置时显示）：
       --config merge   增量合并本次协议到现有配置（默认）
@@ -173,7 +228,7 @@ usage() {
       --config new     生成全新配置，不合并已有入站
 
 卸载选项：
-      --uninstall      卸载范围：anytls、vless、hy2 或 all
+      --uninstall      卸载范围：anytls、vless、hy2、snell5、snell6 或 all
       --purge          同时移除 sing-box 软件包（仅适用于 --uninstall all）
   -y, --yes            跳过卸载确认
 
@@ -201,15 +256,22 @@ Hysteria2 + Surge 选项：
       --key           现有 TLS 私钥路径
       --name          Surge 代理名称，默认：HY2
 
+Snell 选项：
+      --snell5-port   Snell v5 TCP 监听端口，默认：自动选择
+      --snell6-port   Snell v6 TCP 监听端口，默认：自动选择
+      --snell5-obfs   v5 HTTP 混淆：none 或 http，默认：none
+      --snell6-mode   v6 流量模式：default、unshaped 或 unsafe-raw，默认：default
+
 通用选项：
-  -m, --mode          模式：1-6、anytls、vless、hy2、full、uninstall、restore
+  -m, --mode          模式：1-8、anytls、vless、hy2、snell5、snell6、full、uninstall、restore
   -p, --port          当前单协议模式的端口；同时安装时请分别使用各协议端口选项
   -h, --help          显示帮助
 
 环境变量：
   INSTALL_MODE, CONFIG_POLICY, UNINSTALL_SCOPE, PORT,
   REALITY_DOMAIN, DOMAIN, ANYTLS_PORT,
-  VLESS_DOMAIN, VLESS_PORT,
+  VLESS_DOMAIN, VLESS_PORT, SNELL5_PORT, SNELL6_PORT,
+  SNELL5_OBFS_MODE, SNELL6_MODE,
   HIGH_PORT_MIN, HIGH_PORT_MAX,
   HY2_SNI, SNI, HY2_PORT, HOP_PORTS, HOP_INTERVAL,
   UP_MBPS, DOWN_MBPS, OBFS, OBFS_PASSWORD,
@@ -236,16 +298,24 @@ while [[ $# -gt 0 ]]; do
       INSTALL_MODE="3"
       shift
       ;;
-    4|full|all|all3|all-protocols)
+    4|snell5|snell-v5)
       INSTALL_MODE="4"
       shift
       ;;
-    5|uninstall|remove)
+    5|snell6|snell-v6)
       INSTALL_MODE="5"
       shift
       ;;
-    6|restore|backup)
+    6|full|all|all5|all-protocols)
       INSTALL_MODE="6"
+      shift
+      ;;
+    7|uninstall|remove)
+      INSTALL_MODE="7"
+      shift
+      ;;
+    8|restore|backup)
+      INSTALL_MODE="8"
       shift
       ;;
     --restore)
@@ -297,6 +367,22 @@ while [[ $# -gt 0 ]]; do
       ;;
     --vless-port)
       VLESS_PORT="${2:-}"
+      shift 2
+      ;;
+    --snell5-port)
+      SNELL5_PORT="${2:-}"
+      shift 2
+      ;;
+    --snell6-port)
+      SNELL6_PORT="${2:-}"
+      shift 2
+      ;;
+    --snell5-obfs)
+      SNELL5_OBFS_MODE="${2:-}"
+      shift 2
+      ;;
+    --snell6-mode)
+      SNELL6_MODE="${2:-}"
       shift 2
       ;;
     -s|--sni|--hy2-sni)
@@ -381,11 +467,13 @@ choose_mode() {
     echo "  1) 安装 AnyTLS + REALITY"
     echo "  2) 安装 Hysteria2 + Surge 端口跳跃"
     echo "  3) 安装 VLESS + REALITY"
-    echo "  4) 同时安装 AnyTLS、VLESS 和 Hysteria2"
-    echo "  5) 卸载"
-    echo "  6) 恢复最新备份"
+    echo "  4) 安装 Snell v5"
+    echo "  5) 安装 Snell v6"
+    echo "  6) 同时安装全部五种协议"
+    echo "  7) 卸载"
+    echo "  8) 恢复最新备份"
     echo
-    read -rp "请输入选项 [1-6]：" INSTALL_MODE
+    read -rp "请输入选项 [1-8]：" INSTALL_MODE
   else
     echo "错误：非交互模式下必须指定安装模式"
     echo "示例：bash $0 --mode full"
@@ -408,15 +496,23 @@ normalize_mode() {
     3|vless|vless-reality)
       INSTALL_VLESS=1
       ;;
-    4|full|all|all3|all-protocols)
+    4|snell5|snell-v5)
+      INSTALL_SNELL5=1
+      ;;
+    5|snell6|snell-v6)
+      INSTALL_SNELL6=1
+      ;;
+    6|full|all|all5|all-protocols)
       INSTALL_ANYTLS=1
       INSTALL_VLESS=1
       INSTALL_HY2=1
+      INSTALL_SNELL5=1
+      INSTALL_SNELL6=1
       ;;
-    5|uninstall|remove)
+    7|uninstall|remove)
       ACTION="uninstall"
       ;;
-    6|restore|backup)
+    8|restore|backup)
       ACTION="restore"
       CONFIG_POLICY="restore"
       ;;
@@ -437,9 +533,11 @@ choose_uninstall_scope() {
       echo "  1) 仅 AnyTLS + REALITY"
       echo "  2) 仅 VLESS + REALITY"
       echo "  3) 仅 Hysteria2 + 端口跳跃"
-      echo "  4) 全部卸载"
+      echo "  4) 仅 Snell v5"
+      echo "  5) 仅 Snell v6"
+      echo "  6) 全部卸载"
       echo
-      read -rp "请输入选项 [1-4]：" UNINSTALL_SCOPE
+      read -rp "请输入选项 [1-6]：" UNINSTALL_SCOPE
     else
       echo "错误：非交互模式下必须指定卸载范围"
       echo "示例：bash $0 --uninstall all --yes"
@@ -457,7 +555,13 @@ choose_uninstall_scope() {
     3|hy2|hysteria2|surge)
       UNINSTALL_SCOPE="hy2"
       ;;
-    4|full|all)
+    4|snell5|snell-v5)
+      UNINSTALL_SCOPE="snell5"
+      ;;
+    5|snell6|snell-v6)
+      UNINSTALL_SCOPE="snell6"
+      ;;
+    6|full|all)
       UNINSTALL_SCOPE="all"
       ;;
     *)
@@ -485,6 +589,12 @@ apply_shared_port() {
 
   if (( INSTALL_HY2 )); then
     HY2_PORT="$SHARED_PORT"
+  fi
+  if (( INSTALL_SNELL5 )); then
+    SNELL5_PORT="$SHARED_PORT"
+  fi
+  if (( INSTALL_SNELL6 )); then
+    SNELL6_PORT="$SHARED_PORT"
   fi
 }
 
@@ -715,6 +825,22 @@ build_vless_share_url() {
   VLESS_SHARE_URL="vless://${VLESS_UUID}@${SERVER_IP}:${VLESS_PORT}?${query}#VLESS-Reality"
 }
 
+build_anytls_share_url() {
+  local query
+  query="security=reality&sni=$(url_encode "$REALITY_DOMAIN")&fp=chrome"
+  query="${query}&pbk=$(url_encode "$ANYTLS_PUBLIC_KEY")&sid=$(url_encode "$ANYTLS_SHORT_ID")"
+  ANYTLS_SHARE_URL="anytls://$(url_encode "$ANYTLS_PASSWORD")@${SERVER_IP}:${ANYTLS_PORT}?${query}#AnyTLS-Reality"
+}
+
+build_snell_share_urls() {
+  if (( INSTALL_SNELL5 )); then
+    SNELL5_SHARE_URL="snell://$(url_encode "$SNELL5_PSK")@${SERVER_IP}:${SNELL5_PORT}?version=5&obfs=${SNELL5_OBFS_MODE}#Snell-v5"
+  fi
+  if (( INSTALL_SNELL6 )); then
+    SNELL6_SHARE_URL="snell://$(url_encode "$SNELL6_PSK")@${SERVER_IP}:${SNELL6_PORT}?version=6&mode=${SNELL6_MODE}#Snell-v6"
+  fi
+}
+
 prepare_certificate() {
   local san_type
 
@@ -914,14 +1040,26 @@ backup_existing_files() {
   local -a sources=(
     "$SERVER_CONF"
     "$ANYTLS_CLIENT_OUT"
+    "$ANYTLS_URL_FILE"
+    "$ANYTLS_SURGE_CONF"
     "$VLESS_CLIENT_OUT"
     "$VLESS_URL_FILE"
+    "$VLESS_SURGE_CONF"
     "$HY2_CLIENT_OUT"
     "$SURGE_CONF"
     "$HY2_URL_FILE"
     "$ANYTLS_INFO"
     "$VLESS_INFO"
     "$HY2_INFO"
+    "$SNELL5_INFO"
+    "$SNELL6_INFO"
+    "$SNELL_SURGE_CONF"
+    "$SNELL5_CLIENT_OUT"
+    "$SNELL5_URL_FILE"
+    "$SNELL5_SURGE_CONF"
+    "$SNELL6_CLIENT_OUT"
+    "$SNELL6_URL_FILE"
+    "$SNELL6_SURGE_CONF"
     "$COMBINED_INFO"
     "$PORT_ENV"
     "$PORT_HELPER"
@@ -1076,14 +1214,26 @@ restore_latest_backup() {
   local -a destinations=(
     "$SERVER_CONF"
     "$ANYTLS_CLIENT_OUT"
+    "$ANYTLS_URL_FILE"
+    "$ANYTLS_SURGE_CONF"
     "$VLESS_CLIENT_OUT"
     "$VLESS_URL_FILE"
+    "$VLESS_SURGE_CONF"
     "$HY2_CLIENT_OUT"
     "$SURGE_CONF"
     "$HY2_URL_FILE"
     "$ANYTLS_INFO"
     "$VLESS_INFO"
     "$HY2_INFO"
+    "$SNELL5_INFO"
+    "$SNELL6_INFO"
+    "$SNELL_SURGE_CONF"
+    "$SNELL5_CLIENT_OUT"
+    "$SNELL5_URL_FILE"
+    "$SNELL5_SURGE_CONF"
+    "$SNELL6_CLIENT_OUT"
+    "$SNELL6_URL_FILE"
+    "$SNELL6_SURGE_CONF"
     "$COMBINED_INFO"
     "$PORT_ENV"
     "$PORT_HELPER"
@@ -1196,11 +1346,11 @@ confirm_uninstall() {
 }
 
 remove_anytls_files() {
-  rm -f "$ANYTLS_CLIENT_OUT" "$ANYTLS_INFO"
+  rm -f "$ANYTLS_CLIENT_OUT" "$ANYTLS_URL_FILE" "$ANYTLS_SURGE_CONF" "$ANYTLS_INFO"
 }
 
 remove_vless_files() {
-  rm -f "$VLESS_CLIENT_OUT" "$VLESS_URL_FILE" "$VLESS_INFO"
+  rm -f "$VLESS_CLIENT_OUT" "$VLESS_URL_FILE" "$VLESS_SURGE_CONF" "$VLESS_INFO"
 }
 
 remove_hy2_files() {
@@ -1217,10 +1367,37 @@ remove_hy2_files() {
   rmdir "$(dirname "$SYSTEMD_DROPIN")" 2>/dev/null || true
 }
 
+remove_snell_files() {
+  local version="$1"
+  local lines=""
+  local members=""
+  if [[ "$version" == "5" ]]; then
+    rm -f "$SNELL5_INFO" "$SNELL5_CLIENT_OUT" "$SNELL5_URL_FILE" "$SNELL5_SURGE_CONF"
+  else
+    rm -f "$SNELL6_INFO" "$SNELL6_CLIENT_OUT" "$SNELL6_URL_FILE" "$SNELL6_SURGE_CONF"
+  fi
+  if [[ -f "$SNELL5_INFO" ]]; then
+    lines="$(sed -n '/^SnellV5=snell,/p' "$SNELL5_INFO" | head -n 1)"
+    members="SnellV5,"
+  fi
+  if [[ -f "$SNELL6_INFO" ]]; then
+    [[ -n "$lines" ]] && lines="${lines}"$'\n'
+    lines="${lines}$(sed -n '/^SnellV6=snell,/p' "$SNELL6_INFO" | head -n 1)"
+    members="${members}SnellV6,"
+  fi
+  if [[ -n "$lines" ]]; then
+    printf '[Proxy]\n%s\n\n[Proxy Group]\nSnell=select,%sDIRECT\n' "$lines" "$members" > "$SNELL_SURGE_CONF"
+  else
+    rm -f "$SNELL_SURGE_CONF"
+  fi
+}
+
 uninstall_selected() {
   local remove_anytls=false
   local remove_vless=false
   local remove_hy2=false
+  local remove_snell5=false
+  local remove_snell6=false
   local matched=0
   local remaining=0
   local temp_config=""
@@ -1236,10 +1413,18 @@ uninstall_selected() {
     hy2)
       remove_hy2=true
       ;;
+    snell5)
+      remove_snell5=true
+      ;;
+    snell6)
+      remove_snell6=true
+      ;;
     all)
       remove_anytls=true
       remove_vless=true
       remove_hy2=true
+      remove_snell5=true
+      remove_snell6=true
       ;;
   esac
 
@@ -1262,25 +1447,29 @@ uninstall_selected() {
       backup_status="$LAST_BACKUP_DIR"
     fi
 
-    matched="$(jq --argjson remove_anytls "$remove_anytls" --argjson remove_vless "$remove_vless" --argjson remove_hy2 "$remove_hy2" '
+    matched="$(jq --argjson remove_anytls "$remove_anytls" --argjson remove_vless "$remove_vless" --argjson remove_hy2 "$remove_hy2" --argjson remove_snell5 "$remove_snell5" --argjson remove_snell6 "$remove_snell6" '
       [(.inbounds // [])[]
         | select(
             (($remove_anytls == true) and (.tag == "anytls-in"))
             or (($remove_vless == true) and (.tag == "vless-in"))
             or (($remove_hy2 == true) and (.tag == "hy2-in"))
+            or (($remove_snell5 == true) and (.tag == "snell5-in"))
+            or (($remove_snell6 == true) and (.tag == "snell6-in"))
           )
       ] | length
     ' "$SERVER_CONF")"
 
     if (( matched > 0 )); then
       temp_config="$(mktemp)"
-      jq --argjson remove_anytls "$remove_anytls" --argjson remove_vless "$remove_vless" --argjson remove_hy2 "$remove_hy2" '
+      jq --argjson remove_anytls "$remove_anytls" --argjson remove_vless "$remove_vless" --argjson remove_hy2 "$remove_hy2" --argjson remove_snell5 "$remove_snell5" --argjson remove_snell6 "$remove_snell6" '
         .inbounds = [
           (.inbounds // [])[]
           | select(
               (($remove_anytls == false) or (.tag != "anytls-in"))
               and (($remove_vless == false) or (.tag != "vless-in"))
               and (($remove_hy2 == false) or (.tag != "hy2-in"))
+              and (($remove_snell5 == false) or (.tag != "snell5-in"))
+              and (($remove_snell6 == false) or (.tag != "snell6-in"))
             )
         ]
       ' "$SERVER_CONF" > "$temp_config"
@@ -1310,6 +1499,12 @@ uninstall_selected() {
   fi
   if [[ "$remove_hy2" == true ]]; then
     remove_hy2_files
+  fi
+  if [[ "$remove_snell5" == true ]]; then
+    remove_snell_files 5
+  fi
+  if [[ "$remove_snell6" == true ]]; then
+    remove_snell_files 6
   fi
   rm -f "$COMBINED_INFO"
 
@@ -1398,6 +1593,58 @@ prepare_inputs() {
       ss -H -lntp 2>/dev/null | awk -v p="$VLESS_PORT" '$4 ~ ":" p "$" {print}' || true
       exit 1
     fi
+  fi
+
+  if (( INSTALL_SNELL5 )); then
+    if [[ -z "$SNELL5_PORT" || "$SNELL5_PORT" == "auto" || "$SNELL5_PORT" == "random" ]]; then
+      SNELL5_PORT="$(pick_random_free_high_tcp_port)"
+      while { (( INSTALL_ANYTLS )) && [[ "$SNELL5_PORT" == "$ANYTLS_PORT" ]]; } \
+        || { (( INSTALL_VLESS )) && [[ "$SNELL5_PORT" == "$VLESS_PORT" ]]; }; do
+        SNELL5_PORT="$(pick_random_free_high_tcp_port)"
+      done
+      SNELL5_PORT_MODE="自动随机"
+    elif validate_port "$SNELL5_PORT"; then
+      SNELL5_PORT_MODE="手动指定"
+    else
+      echo "错误：无效的 Snell v5 端口：$SNELL5_PORT"
+      exit 1
+    fi
+    [[ "$SNELL5_OBFS_MODE" == "none" || "$SNELL5_OBFS_MODE" == "http" ]] || {
+      echo "错误：Snell v5 混淆只能是 none 或 http"; exit 1;
+    }
+    if { (( INSTALL_ANYTLS )) && [[ "$SNELL5_PORT" == "$ANYTLS_PORT" ]]; } \
+      || { (( INSTALL_VLESS )) && [[ "$SNELL5_PORT" == "$VLESS_PORT" ]]; }; then
+      echo "错误：Snell v5 端口与本次安装的其他 TCP 协议重复：$SNELL5_PORT"
+      exit 1
+    fi
+    is_tcp_port_in_use_by_other "$SNELL5_PORT" && { echo "错误：TCP 端口 $SNELL5_PORT 已被其他进程占用"; exit 1; }
+  fi
+
+  if (( INSTALL_SNELL6 )); then
+    if [[ -z "$SNELL6_PORT" || "$SNELL6_PORT" == "auto" || "$SNELL6_PORT" == "random" ]]; then
+      SNELL6_PORT="$(pick_random_free_high_tcp_port)"
+      while { (( INSTALL_ANYTLS )) && [[ "$SNELL6_PORT" == "$ANYTLS_PORT" ]]; } \
+        || { (( INSTALL_VLESS )) && [[ "$SNELL6_PORT" == "$VLESS_PORT" ]]; } \
+        || { (( INSTALL_SNELL5 )) && [[ "$SNELL6_PORT" == "$SNELL5_PORT" ]]; }; do
+        SNELL6_PORT="$(pick_random_free_high_tcp_port)"
+      done
+      SNELL6_PORT_MODE="自动随机"
+    elif validate_port "$SNELL6_PORT"; then
+      SNELL6_PORT_MODE="手动指定"
+    else
+      echo "错误：无效的 Snell v6 端口：$SNELL6_PORT"
+      exit 1
+    fi
+    [[ "$SNELL6_MODE" == "default" || "$SNELL6_MODE" == "unshaped" || "$SNELL6_MODE" == "unsafe-raw" ]] || {
+      echo "错误：Snell v6 模式只能是 default、unshaped 或 unsafe-raw"; exit 1;
+    }
+    if { (( INSTALL_ANYTLS )) && [[ "$SNELL6_PORT" == "$ANYTLS_PORT" ]]; } \
+      || { (( INSTALL_VLESS )) && [[ "$SNELL6_PORT" == "$VLESS_PORT" ]]; } \
+      || { (( INSTALL_SNELL5 )) && [[ "$SNELL6_PORT" == "$SNELL5_PORT" ]]; }; then
+      echo "错误：Snell v6 端口与本次安装的其他 TCP 协议重复：$SNELL6_PORT"
+      exit 1
+    fi
+    is_tcp_port_in_use_by_other "$SNELL6_PORT" && { echo "错误：TCP 端口 $SNELL6_PORT 已被其他进程占用"; exit 1; }
   fi
 
   if (( INSTALL_HY2 )); then
@@ -1561,6 +1808,15 @@ generate_hy2_secrets() {
   HY2_PASSWORD="$(openssl rand -hex 32)"
 }
 
+generate_snell_secrets() {
+  if (( INSTALL_SNELL5 )); then
+    SNELL5_PSK="$(openssl rand -base64 32 | tr -d '\n')"
+  fi
+  if (( INSTALL_SNELL6 )); then
+    SNELL6_PSK="$(openssl rand -base64 32 | tr -d '\n')"
+  fi
+}
+
 anytls_inbound_json() {
   cat << JSON
     {
@@ -1646,6 +1902,34 @@ $(json_number_field "up_mbps" "$UP_MBPS")$(json_number_field "down_mbps" "$DOWN_
 JSON
 }
 
+snell5_inbound_json() {
+  cat << JSON
+    {
+      "type": "snell",
+      "tag": "snell5-in",
+      "listen": "::",
+      "listen_port": ${SNELL5_PORT},
+      "version": 5,
+      "psk": "${SNELL5_PSK}",
+      "obfs_mode": "${SNELL5_OBFS_MODE}"
+    }
+JSON
+}
+
+snell6_inbound_json() {
+  cat << JSON
+    {
+      "type": "snell",
+      "tag": "snell6-in",
+      "listen": "::",
+      "listen_port": ${SNELL6_PORT},
+      "version": 6,
+      "psk": "${SNELL6_PSK}",
+      "mode": "${SNELL6_MODE}"
+    }
+JSON
+}
+
 selected_inbounds_json() {
   local inbounds="" sep=""
 
@@ -1663,6 +1947,18 @@ $(vless_inbound_json)"
   if (( INSTALL_HY2 )); then
     inbounds="${inbounds}${sep}
 $(hy2_inbound_json)"
+    sep=","
+  fi
+
+  if (( INSTALL_SNELL5 )); then
+    inbounds="${inbounds}${sep}
+$(snell5_inbound_json)"
+    sep=","
+  fi
+
+  if (( INSTALL_SNELL6 )); then
+    inbounds="${inbounds}${sep}
+$(snell6_inbound_json)"
   fi
 
   cat << JSON
@@ -1744,6 +2040,7 @@ detect_server_ip() {
 }
 
 write_anytls_client() {
+  build_anytls_share_url
   cat > "$ANYTLS_CLIENT_OUT" << JSON
 {
   "outbounds": [
@@ -1770,6 +2067,12 @@ write_anytls_client() {
   ]
 }
 JSON
+
+  printf '%s\n' "$ANYTLS_SHARE_URL" > "$ANYTLS_URL_FILE"
+  cat > "$ANYTLS_SURGE_CONF" << TXT
+# Surge 原生 AnyTLS 不支持 REALITY，不能直接连接此 AnyTLS + REALITY 服务端。
+# 请使用同目录的 anytls-sing-box.json 或 anytls-url.txt。
+TXT
 }
 
 write_vless_client() {
@@ -1804,6 +2107,10 @@ write_vless_client() {
 JSON
 
   printf '%s\n' "$VLESS_SHARE_URL" > "$VLESS_URL_FILE"
+  cat > "$VLESS_SURGE_CONF" << TXT
+# Surge 当前不支持 VLESS + REALITY，无法生成可用的原生 Surge 代理行。
+# 请使用同目录的 vless-sing-box.json 或 vless-url.txt。
+TXT
 }
 
 write_hy2_clients() {
@@ -1841,11 +2148,97 @@ SURGE
   printf '%s\n' "$HY2_SHARE_URL" > "$HY2_URL_FILE"
 }
 
+write_snell_clients() {
+  local lines=""
+  local members=""
+
+  build_snell_share_urls
+
+  if (( INSTALL_SNELL5 )); then
+    cat > "$SNELL5_CLIENT_OUT" << JSON
+{
+  "outbounds": [
+    {
+      "type": "snell",
+      "tag": "proxy",
+      "server": "${SERVER_IP}",
+      "server_port": ${SNELL5_PORT},
+      "version": 4,
+      "psk": "${SNELL5_PSK}",
+      "network": "tcp",
+      "obfs_mode": "${SNELL5_OBFS_MODE}"
+    }
+  ]
+}
+JSON
+    printf '%s\n' "$SNELL5_SHARE_URL" > "$SNELL5_URL_FILE"
+  fi
+
+  if (( INSTALL_SNELL6 )); then
+    cat > "$SNELL6_CLIENT_OUT" << JSON
+{
+  "outbounds": [
+    {
+      "type": "snell",
+      "tag": "proxy",
+      "server": "${SERVER_IP}",
+      "server_port": ${SNELL6_PORT},
+      "version": 6,
+      "psk": "${SNELL6_PSK}",
+      "network": "tcp",
+      "mode": "${SNELL6_MODE}"
+    }
+  ]
+}
+JSON
+    printf '%s\n' "$SNELL6_SHARE_URL" > "$SNELL6_URL_FILE"
+  fi
+
+  if (( INSTALL_SNELL5 )); then
+    SNELL5_SURGE_LINE="SnellV5=snell,${SERVER_IP},${SNELL5_PORT},psk=\"${SNELL5_PSK}\",version=5,tfo=false"
+  elif [[ -f "$SNELL5_INFO" ]]; then
+    SNELL5_SURGE_LINE="$(sed -n '/^SnellV5=snell,/p' "$SNELL5_INFO" | head -n 1)"
+  fi
+
+  if (( INSTALL_SNELL6 )); then
+    SNELL6_SURGE_LINE="SnellV6=snell,${SERVER_IP},${SNELL6_PORT},psk=\"${SNELL6_PSK}\",version=6,mode=${SNELL6_MODE},tfo=false"
+  elif [[ -f "$SNELL6_INFO" ]]; then
+    SNELL6_SURGE_LINE="$(sed -n '/^SnellV6=snell,/p' "$SNELL6_INFO" | head -n 1)"
+  fi
+
+  if [[ -n "$SNELL5_SURGE_LINE" ]]; then
+    lines="$SNELL5_SURGE_LINE"
+    members="SnellV5,"
+  fi
+  if [[ -n "$SNELL6_SURGE_LINE" ]]; then
+    [[ -n "$lines" ]] && lines="${lines}"$'\n'
+    lines="${lines}${SNELL6_SURGE_LINE}"
+    members="${members}SnellV6,"
+  fi
+
+  cat > "$SNELL_SURGE_CONF" << SURGE
+[Proxy]
+$lines
+
+[Proxy Group]
+Snell=select,${members}DIRECT
+SURGE
+
+  if (( INSTALL_SNELL5 )); then
+    printf '[Proxy]\n%s\n' "$SNELL5_SURGE_LINE" > "$SNELL5_SURGE_CONF"
+  fi
+  if (( INSTALL_SNELL6 )); then
+    printf '[Proxy]\n%s\n' "$SNELL6_SURGE_LINE" > "$SNELL6_SURGE_CONF"
+  fi
+}
+
 write_info_files() {
   local port_service_config
   local has_anytls=0
   local has_vless=0
   local has_hy2=0
+  local has_snell5=0
+  local has_snell6=0
 
   if [[ "$SERVICE_MANAGER" == "systemd" ]]; then
     port_service_config="$SYSTEMD_DROPIN"
@@ -1862,6 +2255,8 @@ write_info_files() {
   if jq -e '.inbounds[]? | select(.tag == "hy2-in")' "$SERVER_CONF" >/dev/null 2>&1; then
     has_hy2=1
   fi
+  jq -e '.inbounds[]? | select(.tag == "snell5-in")' "$SERVER_CONF" >/dev/null 2>&1 && has_snell5=1
+  jq -e '.inbounds[]? | select(.tag == "snell6-in")' "$SERVER_CONF" >/dev/null 2>&1 && has_snell6=1
 
   cat > "$COMBINED_INFO" << TXT
 sbox-reality 统一安装完成
@@ -1871,6 +2266,8 @@ sbox-reality 统一安装完成
   已安装 AnyTLS + REALITY：$has_anytls
   已安装 VLESS + REALITY：$has_vless
   已安装 Hysteria2 + Surge：$has_hy2
+  已安装 Snell v5：$has_snell5
+  已安装 Snell v6：$has_snell6
 TXT
 
   if (( INSTALL_ANYTLS )); then
@@ -1885,6 +2282,11 @@ AnyTLS + REALITY 安装完成
 
 客户端出站配置：
   文件：$ANYTLS_CLIENT_OUT
+  URL：$ANYTLS_URL_FILE
+  Surge：$ANYTLS_SURGE_CONF（Surge 不支持 REALITY，仅提供兼容性说明）
+
+客户端链接：
+$ANYTLS_SHARE_URL
 
 客户端参数：
   服务器：$SERVER_IP
@@ -1914,6 +2316,7 @@ VLESS + REALITY 安装完成
 客户端文件：
   sing-box 出站配置：$VLESS_CLIENT_OUT
   VLESS 分享链接：$VLESS_URL_FILE
+  Surge：$VLESS_SURGE_CONF（Surge 不支持 VLESS + REALITY，仅提供兼容性说明）
 
 客户端链接：
 $VLESS_SHARE_URL
@@ -2000,6 +2403,66 @@ TXT
     printf '\n' >> "$COMBINED_INFO"
   fi
 
+  if (( INSTALL_SNELL5 )); then
+    cat > "$SNELL5_INFO" << TXT
+Snell v5 安装完成
+
+服务端：
+  配置文件：$SERVER_CONF
+  监听端口：$SNELL5_PORT
+  端口模式：$SNELL5_PORT_MODE
+  PSK：$SNELL5_PSK
+  HTTP 混淆：$SNELL5_OBFS_MODE
+
+Surge 代理配置：
+$SNELL5_SURGE_LINE
+
+客户端文件：
+  sing-box：$SNELL5_CLIENT_OUT
+  URL：$SNELL5_URL_FILE
+  Surge：$SNELL5_SURGE_CONF
+
+客户端链接（约定格式，Snell 无官方统一 URI 标准）：
+$SNELL5_SHARE_URL
+
+说明：sing-box 出站按官方要求使用 version 4 连接 v5 TCP 服务端；v5 不支持 QUIC Proxy。
+TXT
+    cat "$SNELL5_INFO" >> "$COMBINED_INFO"
+    printf '\n' >> "$COMBINED_INFO"
+  elif [[ -f "$SNELL5_INFO" ]]; then
+    cat "$SNELL5_INFO" >> "$COMBINED_INFO"
+    printf '\n' >> "$COMBINED_INFO"
+  fi
+
+  if (( INSTALL_SNELL6 )); then
+    cat > "$SNELL6_INFO" << TXT
+Snell v6 安装完成
+
+服务端：
+  配置文件：$SERVER_CONF
+  监听端口：$SNELL6_PORT
+  端口模式：$SNELL6_PORT_MODE
+  PSK：$SNELL6_PSK
+  流量模式：$SNELL6_MODE
+
+Surge 代理配置：
+$SNELL6_SURGE_LINE
+
+客户端文件：
+  sing-box：$SNELL6_CLIENT_OUT
+  URL：$SNELL6_URL_FILE
+  Surge：$SNELL6_SURGE_CONF
+
+客户端链接（约定格式，Snell 无官方统一 URI 标准）：
+$SNELL6_SHARE_URL
+TXT
+    cat "$SNELL6_INFO" >> "$COMBINED_INFO"
+    printf '\n' >> "$COMBINED_INFO"
+  elif [[ -f "$SNELL6_INFO" ]]; then
+    cat "$SNELL6_INFO" >> "$COMBINED_INFO"
+    printf '\n' >> "$COMBINED_INFO"
+  fi
+
   if [[ "$SERVICE_MANAGER" == "systemd" ]]; then
     cat >> "$COMBINED_INFO" << TXT
 常用命令：
@@ -2022,6 +2485,7 @@ TXT
   $PORT_HELPER apply
 TXT
   fi
+
 }
 
 print_summary() {
@@ -2054,6 +2518,12 @@ print_summary() {
     echo "Hysteria2 sing-box 客户端出站配置："
     cat "$HY2_CLIENT_OUT"
   fi
+
+  if (( INSTALL_SNELL5 || INSTALL_SNELL6 )); then
+    echo
+    echo "Snell Surge 配置片段："
+    cat "$SNELL_SURGE_CONF"
+  fi
 }
 
 main() {
@@ -2073,6 +2543,7 @@ main() {
   fi
 
   detect_platform
+  prepare_output_dir
 
   if [[ "$ACTION" == "uninstall" ]]; then
     uninstall_selected
@@ -2104,6 +2575,8 @@ main() {
   echo "  安装 AnyTLS + REALITY：$INSTALL_ANYTLS"
   echo "  安装 VLESS + REALITY：$INSTALL_VLESS"
   echo "  安装 Hysteria2 + Surge：$INSTALL_HY2"
+  echo "  安装 Snell v5：$INSTALL_SNELL5"
+  echo "  安装 Snell v6：$INSTALL_SNELL6"
   if (( INSTALL_ANYTLS )); then
     echo "  AnyTLS 域名：$REALITY_DOMAIN"
     echo "  AnyTLS 端口：$ANYTLS_PORT ($ANYTLS_PORT_MODE)"
@@ -2119,6 +2592,14 @@ main() {
     echo "  Hysteria2 跳跃间隔：${HOP_INTERVAL} 秒"
     echo "  Hysteria2 混淆：$OBFS"
   fi
+  if (( INSTALL_SNELL5 )); then
+    echo "  Snell v5 端口：$SNELL5_PORT ($SNELL5_PORT_MODE)"
+    echo "  Snell v5 混淆：$SNELL5_OBFS_MODE"
+  fi
+  if (( INSTALL_SNELL6 )); then
+    echo "  Snell v6 端口：$SNELL6_PORT ($SNELL6_PORT_MODE)"
+    echo "  Snell v6 模式：$SNELL6_MODE"
+  fi
   echo
 
   install_dependencies
@@ -2130,6 +2611,8 @@ main() {
   if (( INSTALL_VLESS )); then
     generate_vless_secrets
   fi
+
+  generate_snell_secrets
 
   if (( INSTALL_HY2 )); then
     prepare_certificate
@@ -2152,6 +2635,10 @@ main() {
 
   if (( INSTALL_HY2 )); then
     write_hy2_clients
+  fi
+
+  if (( INSTALL_SNELL5 || INSTALL_SNELL6 )); then
+    write_snell_clients
   fi
 
   sing-box check -c "$SERVER_CONF"
