@@ -8,6 +8,11 @@ UNINSTALL_SCOPE="${UNINSTALL_SCOPE:-}"
 CONFIG_POLICY="${CONFIG_POLICY:-ask}"
 PURGE_SING_BOX=0
 ASSUME_YES=0
+HY2_PORT_HOPPING_EXPLICIT=0
+HOP_PORTS_EXPLICIT=0
+
+[[ -n "${HY2_PORT_HOPPING+x}" ]] && HY2_PORT_HOPPING_EXPLICIT=1
+[[ -n "${HOP_PORTS+x}" ]] && HOP_PORTS_EXPLICIT=1
 
 REALITY_DOMAIN="${REALITY_DOMAIN:-${DOMAIN:-www.apple.com}}"
 ANYTLS_PORT="${ANYTLS_PORT:-auto}"
@@ -22,6 +27,7 @@ HIGH_PORT_MAX="${HIGH_PORT_MAX:-65535}"
 
 HY2_SNI="${HY2_SNI:-${SNI:-www.bing.com}}"
 HY2_PORT="${HY2_PORT:-auto}"
+HY2_PORT_HOPPING="${HY2_PORT_HOPPING:-off}"
 HOP_PORTS="${HOP_PORTS:-20000-50000}"
 HOP_INTERVAL="${HOP_INTERVAL:-30}"
 UP_MBPS="${UP_MBPS:-}"
@@ -315,7 +321,7 @@ usage() {
 
 安装模式：
   1, anytls     安装 AnyTLS + REALITY
-  2, hy2        安装 Hysteria2 + Surge 端口跳跃
+  2, hy2        安装 Hysteria2 + Surge（可选端口跳跃）
   3, vless      安装 VLESS + REALITY
   4, snell5     安装 Snell v5
   5, snell6     安装 Snell v6
@@ -345,7 +351,8 @@ VLESS + REALITY 选项：
 Hysteria2 + Surge 选项：
   -s, --sni           TLS SNI 和自签证书通用名称，默认：www.bing.com
       --hy2-port      Hysteria2 UDP 监听端口，默认：自动选择
-  -P, --ports         Surge 端口跳跃端口/范围，默认：20000-50000
+      --port-hopping  端口跳跃：on 或 off，默认：off
+  -P, --ports         开启端口跳跃并指定范围，默认：20000-50000
   -i, --interval      端口跳跃间隔（秒），最小 5，默认：30
       --up            服务端上传带宽（Mbps），可选
       --down          服务端下载带宽（Mbps），可选
@@ -375,7 +382,7 @@ Snell 选项：
   VLESS_DOMAIN, VLESS_PORT, SNELL5_PORT, SNELL6_PORT,
   SNELL5_OBFS_MODE, SNELL6_MODE,
   HIGH_PORT_MIN, HIGH_PORT_MAX,
-  HY2_SNI, SNI, HY2_PORT, HOP_PORTS, HOP_INTERVAL,
+  HY2_SNI, SNI, HY2_PORT, HY2_PORT_HOPPING, HOP_PORTS, HOP_INTERVAL,
   UP_MBPS, DOWN_MBPS, OBFS, OBFS_PASSWORD,
   GECKO_MIN_PACKET_SIZE, GECKO_MAX_PACKET_SIZE,
   CERT_PATH, KEY_PATH, PROXY_NAME
@@ -497,6 +504,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     -P|--ports)
       HOP_PORTS="${2:-}"
+      HY2_PORT_HOPPING="on"
+      HY2_PORT_HOPPING_EXPLICIT=1
+      HOP_PORTS_EXPLICIT=1
+      shift 2
+      ;;
+    --port-hopping)
+      HY2_PORT_HOPPING="${2:-}"
+      HY2_PORT_HOPPING_EXPLICIT=1
       shift 2
       ;;
     -i|--interval)
@@ -567,7 +582,7 @@ choose_mode() {
   if [[ -t 0 ]]; then
     echo "请选择操作："
     echo "  1) 安装 AnyTLS + REALITY"
-    echo "  2) 安装 Hysteria2 + Surge 端口跳跃"
+    echo "  2) 安装 Hysteria2 + Surge（可选端口跳跃）"
     echo "  3) 安装 VLESS + REALITY"
     echo "  4) 安装 Snell v5"
     echo "  5) 安装 Snell v6"
@@ -676,11 +691,66 @@ choose_protocol_port() {
   esac
 }
 
+choose_hy2_port_hopping() {
+  local choice range_choice start_port end_port
+
+  (( INSTALL_HY2 )) || return 0
+  [[ -t 0 ]] || return 0
+
+  if (( ! HY2_PORT_HOPPING_EXPLICIT )); then
+    echo
+    echo "是否开启 Hysteria2 端口跳跃："
+    echo "  1) 不开启（默认）"
+    echo "  2) 开启"
+    read -rp "请选择 [1]：" choice
+    choice="${choice:-1}"
+    case "$choice" in
+      1) HY2_PORT_HOPPING="off" ;;
+      2) HY2_PORT_HOPPING="on" ;;
+      *) echo "错误：无效的端口跳跃选项：$choice"; exit 1 ;;
+    esac
+  fi
+
+  [[ "$HY2_PORT_HOPPING" == "on" ]] || return 0
+  (( HOP_PORTS_EXPLICIT )) && return 0
+
+  echo
+  echo "请选择端口跳跃区间："
+  echo "  1) 默认区间 20000-50000"
+  echo "  2) 自定义起始和结束端口"
+  read -rp "请选择 [1]：" range_choice
+  range_choice="${range_choice:-1}"
+
+  case "$range_choice" in
+    1)
+      HOP_PORTS="20000-50000"
+      ;;
+    2)
+      while true; do
+        read -rp "请输入跳跃起始端口 [1-65535]：" start_port
+        read -rp "请输入跳跃结束端口 [1-65535]：" end_port
+        if validate_port "$start_port" && validate_port "$end_port" && (( start_port <= end_port )); then
+          HOP_PORTS="${start_port}-${end_port}"
+          break
+        fi
+        echo "错误：端口必须在 1-65535 之间，且起始端口不能大于结束端口"
+      done
+      ;;
+    *)
+      echo "错误：无效的跳跃区间选项：$range_choice"
+      exit 1
+      ;;
+  esac
+}
+
 choose_install_ports() {
   [[ "$ACTION" == "install" ]] || return 0
 
+  choose_hy2_port_hopping
   (( INSTALL_ANYTLS )) && choose_protocol_port "AnyTLS" "ANYTLS_PORT" "tcp"
-  (( INSTALL_HY2 )) && choose_protocol_port "Hysteria2 实际监听" "HY2_PORT" "udp"
+  if (( INSTALL_HY2 )) && [[ "$HY2_PORT_HOPPING" != "on" ]]; then
+    choose_protocol_port "Hysteria2" "HY2_PORT" "udp"
+  fi
   (( INSTALL_VLESS )) && choose_protocol_port "VLESS" "VLESS_PORT" "tcp"
   (( INSTALL_SNELL5 )) && choose_protocol_port "Snell v5" "SNELL5_PORT" "tcp"
   (( INSTALL_SNELL6 )) && choose_protocol_port "Snell v6" "SNELL6_PORT" "tcp"
@@ -823,6 +893,27 @@ pick_random_free_high_tcp_port() {
   exit 1
 }
 
+pick_random_free_high_udp_port() {
+  local candidate
+  local range=$(( HIGH_PORT_MAX - HIGH_PORT_MIN + 1 ))
+
+  if (( HIGH_PORT_MIN < 1024 || HIGH_PORT_MIN > HIGH_PORT_MAX || HIGH_PORT_MAX > 65535 )); then
+    echo "错误：无效的高端口范围：${HIGH_PORT_MIN}-${HIGH_PORT_MAX}" >&2
+    exit 1
+  fi
+
+  for _ in $(seq 1 100); do
+    candidate=$(( HIGH_PORT_MIN + $(random_number) % range ))
+    if ! is_udp_port_in_use_by_other "$candidate"; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+
+  echo "错误：在 ${HIGH_PORT_MIN}-${HIGH_PORT_MAX} 范围内未找到可用的 UDP 高端口" >&2
+  exit 1
+}
+
 normalize_hop_ports() {
   local -a specs
   local raw spec start end normalized sep first
@@ -950,7 +1041,7 @@ surge_obfs_param() {
 surge_extra_params() {
   local extra=""
 
-  if [[ "$HOP_INTERVAL" != "30" ]]; then
+  if [[ "$HY2_PORT_HOPPING" == "on" && "$HOP_INTERVAL" != "30" ]]; then
     extra="${extra},port-hopping-interval=${HOP_INTERVAL}"
   fi
 
@@ -962,9 +1053,15 @@ surge_extra_params() {
 }
 
 build_surge_proxy_line() {
-  printf '%s=hysteria2,%s,%s,password="%s",port-hopping="%s"%s,sni="%s",skip-cert-verify=true,tfo=false%s' \
-    "$PROXY_NAME" "$SERVER_IP" "$HY2_PORT" "$HY2_PASSWORD" \
-    "$NORMALIZED_HOP_PORTS" "$(surge_obfs_param)" "$HY2_SNI" "$(surge_extra_params)"
+  if [[ "$HY2_PORT_HOPPING" == "on" ]]; then
+    printf '%s=hysteria2,%s,%s,password="%s",port-hopping="%s"%s,sni="%s",skip-cert-verify=true,tfo=false%s' \
+      "$PROXY_NAME" "$SERVER_IP" "$HY2_PORT" "$HY2_PASSWORD" \
+      "$NORMALIZED_HOP_PORTS" "$(surge_obfs_param)" "$HY2_SNI" "$(surge_extra_params)"
+  else
+    printf '%s=hysteria2,%s,%s,password="%s"%s,sni="%s",skip-cert-verify=true,tfo=false%s' \
+      "$PROXY_NAME" "$SERVER_IP" "$HY2_PORT" "$HY2_PASSWORD" \
+      "$(surge_obfs_param)" "$HY2_SNI" "$(surge_extra_params)"
+  fi
 }
 
 url_encode() {
@@ -1853,17 +1950,36 @@ prepare_inputs() {
   if (( INSTALL_HY2 )); then
     [[ "$OBFS" == "on" ]] && OBFS="gecko"
 
+    case "$HY2_PORT_HOPPING" in
+      on|true|1) HY2_PORT_HOPPING="on" ;;
+      off|false|0) HY2_PORT_HOPPING="off" ;;
+      *) echo "错误：--port-hopping 只能是 on 或 off"; exit 1 ;;
+    esac
+
     if [[ -z "$HY2_SNI" || "$HY2_SNI" =~ [[:space:]] ]]; then
       echo "错误：Hysteria2 SNI 不能为空或包含空白字符"
       exit 1
     fi
 
-    normalize_hop_ports
-    build_server_ports_json
-
-    if [[ -z "$HY2_PORT" || "$HY2_PORT" == "auto" || "$HY2_PORT" == "random" ]]; then
-      HY2_PORT="$FIRST_HOP_PORT"
-      HY2_PORT_MODE="跳跃范围首端口"
+    if [[ "$HY2_PORT_HOPPING" == "on" ]]; then
+      normalize_hop_ports
+      build_server_ports_json
+      if [[ -z "$HY2_PORT" || "$HY2_PORT" == "auto" || "$HY2_PORT" == "random" ]]; then
+        HY2_PORT="$FIRST_HOP_PORT"
+        HY2_PORT_MODE="跳跃范围首端口"
+      elif validate_port "$HY2_PORT"; then
+        HY2_PORT_MODE="手动指定"
+      else
+        echo "错误：无效的 Hysteria2 监听端口：$HY2_PORT"
+        exit 1
+      fi
+      if ! validate_positive_number "$HOP_INTERVAL" || (( HOP_INTERVAL < 5 )); then
+        echo "错误：Hysteria2 跳跃间隔必须是大于或等于 5 的整数"
+        exit 1
+      fi
+    elif [[ -z "$HY2_PORT" || "$HY2_PORT" == "auto" || "$HY2_PORT" == "random" ]]; then
+      HY2_PORT="$(pick_random_free_high_udp_port)"
+      HY2_PORT_MODE="自动随机"
     elif validate_port "$HY2_PORT"; then
       HY2_PORT_MODE="手动指定"
     else
@@ -1871,9 +1987,10 @@ prepare_inputs() {
       exit 1
     fi
 
-    if ! validate_positive_number "$HOP_INTERVAL" || (( HOP_INTERVAL < 5 )); then
-      echo "错误：Hysteria2 跳跃间隔必须是大于或等于 5 的整数"
-      exit 1
+    if [[ "$HY2_PORT_HOPPING" == "off" ]]; then
+      HOP_PORTS="$HY2_PORT"
+      normalize_hop_ports
+      build_server_ports_json
     fi
 
     if [[ -n "$UP_MBPS" ]] && ! validate_positive_number "$UP_MBPS"; then
@@ -2522,22 +2639,16 @@ TXT
 
   if (( INSTALL_HY2 )); then
     cat > "$HY2_INFO" << TXT
-Hysteria2 + Surge 端口跳跃安装完成
+Hysteria2 + Surge 安装完成
 
 服务端：
   配置文件：$SERVER_CONF
   监听端口：$HY2_PORT
   端口模式：$HY2_PORT_MODE
+  端口跳跃：$HY2_PORT_HOPPING
   SNI：$HY2_SNI
   证书：$CERT_PATH
   私钥：$KEY_PATH
-
-端口跳跃：
-  公共 UDP 端口：$NORMALIZED_HOP_PORTS
-  跳跃间隔：${HOP_INTERVAL} 秒
-  辅助脚本：$PORT_HELPER
-  环境文件：$PORT_ENV
-  服务配置：$port_service_config
 
 客户端文件：
   sing-box 出站配置：$HY2_CLIENT_OUT
@@ -2553,12 +2664,22 @@ $SURGE_PROXY_LINE
 客户端参数：
   服务器：$SERVER_IP
   监听端口：$HY2_PORT
-  跳跃端口：$NORMALIZED_HOP_PORTS
-  跳跃间隔：$HOP_INTERVAL
   密码：$HY2_PASSWORD
   SNI：$HY2_SNI
   跳过证书验证：true
 TXT
+
+    if [[ "$HY2_PORT_HOPPING" == "on" ]]; then
+      cat >> "$HY2_INFO" << TXT
+  跳跃端口：$NORMALIZED_HOP_PORTS
+  跳跃间隔：$HOP_INTERVAL
+
+端口跳跃辅助文件：
+  辅助脚本：$PORT_HELPER
+  环境文件：$PORT_ENV
+  服务配置：$port_service_config
+TXT
+    fi
 
     if [[ "$OBFS" != "off" ]]; then
       cat >> "$HY2_INFO" << TXT
@@ -2575,9 +2696,17 @@ TXT
     cat >> "$HY2_INFO" << TXT
 
 防火墙：
+TXT
+    if [[ "$HY2_PORT_HOPPING" == "on" ]]; then
+      cat >> "$HY2_INFO" << TXT
   请放行公共 UDP 端口：$NORMALIZED_HOP_PORTS
   如果本机防火墙在重定向后过滤流量，还需放行 UDP 监听端口：$HY2_PORT
 TXT
+    else
+      cat >> "$HY2_INFO" << TXT
+  请放行 UDP 监听端口：$HY2_PORT
+TXT
+    fi
     cat "$HY2_INFO" >> "$COMBINED_INFO"
     printf '\n' >> "$COMBINED_INFO"
   elif [[ -f "$HY2_INFO" ]]; then
@@ -2772,8 +2901,11 @@ main() {
   if (( INSTALL_HY2 )); then
     echo "  Hysteria2 SNI：$HY2_SNI"
     echo "  Hysteria2 端口：$HY2_PORT ($HY2_PORT_MODE)"
-    echo "  Hysteria2 跳跃端口：$NORMALIZED_HOP_PORTS"
-    echo "  Hysteria2 跳跃间隔：${HOP_INTERVAL} 秒"
+    echo "  Hysteria2 端口跳跃：$HY2_PORT_HOPPING"
+    if [[ "$HY2_PORT_HOPPING" == "on" ]]; then
+      echo "  Hysteria2 跳跃端口：$NORMALIZED_HOP_PORTS"
+      echo "  Hysteria2 跳跃间隔：${HOP_INTERVAL} 秒"
+    fi
     echo "  Hysteria2 混淆：$OBFS"
   fi
   if (( INSTALL_SNELL5 )); then
@@ -2802,7 +2934,11 @@ main() {
   if (( INSTALL_HY2 )); then
     prepare_certificate
     generate_hy2_secrets
-    write_port_hopping_helper
+    if [[ "$HY2_PORT_HOPPING" == "on" ]]; then
+      write_port_hopping_helper
+    else
+      disable_hy2_port_hopping
+    fi
   elif [[ "$CONFIG_POLICY" == "new" ]]; then
     disable_hy2_port_hopping
   fi

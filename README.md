@@ -37,7 +37,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 
 ```text
 1) 安装 AnyTLS + REALITY
-2) 安装 Hysteria2 + Surge 端口跳跃
+2) 安装 Hysteria2 + Surge（可选端口跳跃）
 3) 安装 VLESS + REALITY
 4) 安装 Snell v5
 5) 安装 Snell v6
@@ -54,7 +54,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 # 只安装 AnyTLS + REALITY
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode 1
 
-# 只安装 Hysteria2 + Surge 端口跳跃
+# 只安装 Hysteria2 + Surge（可选端口跳跃）
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode 2
 
 # 只安装 VLESS + REALITY
@@ -242,13 +242,14 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 
 ---
 
-## Hysteria2 + Surge 端口跳跃
+## Hysteria2 + Surge（可选端口跳跃）
 
 默认配置：
 
 - TLS SNI：`www.bing.com`
-- Hysteria2 公开 UDP 跳跃端口：`20000-50000`
-- sing-box 实际监听端口：默认使用跳跃范围里的第一个端口
+- 端口跳跃：默认不开启，使用随机未占用 UDP 高端口
+- 开启跳跃后：可选默认 `20000-50000`，或分别输入起始、结束端口
+- sing-box 实际监听端口：跳跃时默认使用范围的第一个端口
 - Surge 端口跳跃间隔：`30` 秒
 - Hysteria2 Gecko 混淆：默认开启，包长范围 `512-1200`
 - 证书：自动生成自签证书，Surge 片段默认带 `skip-cert-verify=true`
@@ -257,7 +258,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode 2
 ```
 
-自定义 SNI、端口范围和跳跃间隔：
+开启端口跳跃，并自定义 SNI、端口范围和跳跃间隔：
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode 2 --sni example.com --ports "20000-50000;7044;8000-9000" --interval 30
@@ -401,7 +402,8 @@ Hysteria2 + Surge 参数：
 | --- | --- | --- |
 | `-s`, `--sni` | TLS SNI 和自签证书 CN | `www.bing.com` |
 | `-p`, `--port` | sing-box Hysteria2 实际监听端口；可填具体端口或 `auto` | `auto` |
-| `-P`, `--ports` | Surge `port-hopping` 端口或端口范围，多个值用 `;` 或 `,` 分隔 | `20000-50000` |
+| `--port-hopping` | 是否开启端口跳跃：`on` / `off` | `off` |
+| `-P`, `--ports` | 开启跳跃并指定 Surge `port-hopping` 范围，多个值用 `;` 或 `,` 分隔 | `20000-50000` |
 | `-i`, `--interval` | 端口跳跃间隔秒数，最小 `5` | `30` |
 | `--up` | 服务端上传带宽 Mbps，可选 | 不限制 |
 | `--down` | 服务端下载带宽 Mbps，可选 | 不限制 |
