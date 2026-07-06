@@ -878,6 +878,9 @@ build_server_ports_json() {
   json=""
 
   for spec in "${specs[@]}"; do
+    if [[ "$spec" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+      spec="${BASH_REMATCH[1]}:${BASH_REMATCH[2]}"
+    fi
     json="${json}${sep}\"${spec}\""
     sep=", "
   done
@@ -900,9 +903,7 @@ json_obfs_field() {
     cat << JSON
       "obfs": {
         "type": "gecko",
-        "password": "${OBFS_PASSWORD}",
-        "min_packet_size": ${GECKO_MIN_PACKET_SIZE},
-        "max_packet_size": ${GECKO_MAX_PACKET_SIZE}
+        "password": "${OBFS_PASSWORD}"$(if [[ "$GECKO_MIN_PACKET_SIZE" != "512" ]]; then printf ',\n        "min_packet_size": %s' "$GECKO_MIN_PACKET_SIZE"; fi)$(if [[ "$GECKO_MAX_PACKET_SIZE" != "1200" ]]; then printf ',\n        "max_packet_size": %s' "$GECKO_MAX_PACKET_SIZE"; fi)
       },
 JSON
   else
@@ -913,6 +914,29 @@ JSON
       },
 JSON
   fi
+}
+
+json_hop_interval_field() {
+  [[ "$HOP_INTERVAL" != "30" ]] || return 0
+  printf '      "hop_interval": "%ss",\n' "$HOP_INTERVAL"
+}
+
+json_hy2_server_port_field() {
+  if [[ "$NORMALIZED_HOP_PORTS" =~ ^[0-9]+$ ]]; then
+    printf '      "server_port": %s,\n' "$NORMALIZED_HOP_PORTS"
+  else
+    printf '      "server_ports": %s,\n' "$SERVER_PORTS_JSON"
+  fi
+}
+
+json_snell5_obfs_field() {
+  [[ "$SNELL5_OBFS_MODE" != "none" ]] || return 0
+  printf ',\n      "obfs_mode": "%s"' "$SNELL5_OBFS_MODE"
+}
+
+json_snell6_mode_field() {
+  [[ "$SNELL6_MODE" != "default" ]] || return 0
+  printf ',\n      "mode": "%s"' "$SNELL6_MODE"
 }
 
 surge_obfs_param() {
@@ -2074,7 +2098,6 @@ $(json_number_field "up_mbps" "$UP_MBPS")$(json_number_field "down_mbps" "$DOWN_
       ],
       "tls": {
         "enabled": true,
-        "server_name": "${HY2_SNI}",
         "certificate_path": "${CERT_PATH}",
         "key_path": "${KEY_PATH}"
       }
@@ -2090,8 +2113,7 @@ snell5_inbound_json() {
       "listen": "::",
       "listen_port": ${SNELL5_PORT},
       "version": 5,
-      "psk": "${SNELL5_PSK}",
-      "obfs_mode": "${SNELL5_OBFS_MODE}"
+      "psk": "${SNELL5_PSK}"$(json_snell5_obfs_field)
     }
 JSON
 }
@@ -2104,8 +2126,7 @@ snell6_inbound_json() {
       "listen": "::",
       "listen_port": ${SNELL6_PORT},
       "version": 6,
-      "psk": "${SNELL6_PSK}",
-      "mode": "${SNELL6_MODE}"
+      "psk": "${SNELL6_PSK}"$(json_snell6_mode_field)
     }
 JSON
 }
@@ -2157,17 +2178,12 @@ write_fresh_server_config() {
 
   cat > "$SERVER_CONF" << JSON
 {
-  "log": {
-    "level": "info",
-    "timestamp": true
-  },
   "inbounds": [
 ${inbounds}
   ],
   "outbounds": [
     {
-      "type": "direct",
-      "tag": "direct"
+      "type": "direct"
     }
   ]
 }
@@ -2194,7 +2210,6 @@ write_server_config() {
 
   jq --slurpfile selected "$selected_file" '
     ($selected[0] | map(.tag)) as $selected_tags
-    | .log = (.log // {"level": "info", "timestamp": true})
     | .inbounds = (
         [
           (.inbounds // [])[]
@@ -2203,7 +2218,7 @@ write_server_config() {
       )
     | .outbounds = (
         if ((.outbounds // []) | length) > 0 then .outbounds
-        else [{"type": "direct", "tag": "direct"}]
+        else [{"type": "direct"}]
         end
       )
   ' "$SERVER_CONF" > "$temp_config"
@@ -2226,7 +2241,6 @@ write_anytls_client() {
   "outbounds": [
     {
       "type": "anytls",
-      "tag": "proxy",
       "server": "${SERVER_IP}",
       "server_port": ${ANYTLS_PORT},
       "password": "${ANYTLS_PASSWORD}",
@@ -2234,8 +2248,7 @@ write_anytls_client() {
         "enabled": true,
         "server_name": "${REALITY_DOMAIN}",
         "utls": {
-          "enabled": true,
-          "fingerprint": "chrome"
+          "enabled": true
         },
         "reality": {
           "enabled": true,
@@ -2263,7 +2276,6 @@ write_vless_client() {
   "outbounds": [
     {
       "type": "vless",
-      "tag": "proxy",
       "server": "${SERVER_IP}",
       "server_port": ${VLESS_PORT},
       "uuid": "${VLESS_UUID}",
@@ -2272,8 +2284,7 @@ write_vless_client() {
         "enabled": true,
         "server_name": "${VLESS_DOMAIN}",
         "utls": {
-          "enabled": true,
-          "fingerprint": "chrome"
+          "enabled": true
         },
         "reality": {
           "enabled": true,
@@ -2302,11 +2313,8 @@ write_hy2_clients() {
   "outbounds": [
     {
       "type": "hysteria2",
-      "tag": "proxy",
       "server": "${SERVER_IP}",
-      "server_ports": ${SERVER_PORTS_JSON},
-      "hop_interval": "${HOP_INTERVAL}s",
-$(json_number_field "up_mbps" "$UP_MBPS")$(json_number_field "down_mbps" "$DOWN_MBPS")$(json_obfs_field)      "password": "${HY2_PASSWORD}",
+$(json_hy2_server_port_field)$(json_hop_interval_field)$(json_number_field "up_mbps" "$UP_MBPS")$(json_number_field "down_mbps" "$DOWN_MBPS")$(json_obfs_field)      "password": "${HY2_PASSWORD}",
       "tls": {
         "enabled": true,
         "server_name": "${HY2_SNI}",
@@ -2340,13 +2348,10 @@ write_snell_clients() {
   "outbounds": [
     {
       "type": "snell",
-      "tag": "proxy",
       "server": "${SERVER_IP}",
       "server_port": ${SNELL5_PORT},
       "version": 4,
-      "psk": "${SNELL5_PSK}",
-      "network": "tcp",
-      "obfs_mode": "${SNELL5_OBFS_MODE}"
+      "psk": "${SNELL5_PSK}"$(json_snell5_obfs_field)
     }
   ]
 }
@@ -2360,13 +2365,10 @@ JSON
   "outbounds": [
     {
       "type": "snell",
-      "tag": "proxy",
       "server": "${SERVER_IP}",
       "server_port": ${SNELL6_PORT},
       "version": 6,
-      "psk": "${SNELL6_PSK}",
-      "network": "tcp",
-      "mode": "${SNELL6_MODE}"
+      "psk": "${SNELL6_PSK}"$(json_snell6_mode_field)
     }
   ]
 }

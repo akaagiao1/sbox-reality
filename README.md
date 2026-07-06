@@ -418,6 +418,10 @@ Hysteria2 + Surge 参数：
 
 所有客户端输出统一保存在权限为 `700` 的 `/root/sing-box/` 目录。每种协议都会生成 sing-box JSON、URL 文件、Surge 文件和安装信息：
 
+sing-box 客户端 JSON 使用最小配置：默认值不重复写入，仅保留连接必需字段及用户明确启用的自定义功能，避免固定 TCP 等额外限制影响 Emby 等应用。
+
+服务端 `/etc/sing-box/config.json` 同样使用最小配置；仅保留协议运行、监听、认证及增量卸载所需字段，不额外覆盖 sing-box 默认日志、网络或 Snell 模式。
+
 ```text
 服务端配置：/etc/sing-box/config.json
 统一安装信息：/root/sing-box/all-info.txt
