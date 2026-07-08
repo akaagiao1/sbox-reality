@@ -46,6 +46,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 8) 恢复最新备份
 ```
 
+菜单支持自由多选安装协议：例如输入 `1,2` 会同时安装 AnyTLS 和 Hysteria2；输入 `1,2,3` 会同时安装 AnyTLS、Hysteria2 和 VLESS。也支持中文逗号 `1，2，3`。
+
 选择安装协议后，脚本还会询问端口方式：输入 `1` 或直接回车自动选择未占用的高端口；输入 `2` 可手动填写 NAT 机器映射给你的自定义端口。自定义端口已被占用时会提示改用其他端口；一次安装多个协议时会分别询问各协议端口。
 
 也可以直接指定安装模式：
@@ -65,6 +67,15 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 
 # 只安装 Snell v6
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode snell6
+
+# 自由多选：同时安装 AnyTLS + Hysteria2
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode 1,2
+
+# 自由多选：同时安装 AnyTLS + Hysteria2 + VLESS
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode 1,2,3
+
+# 协议名也可以混用
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) anytls hy2 vless
 
 # 同时安装全部五个入站
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode full
@@ -359,10 +370,10 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 
 | 参数 | 说明 | 默认值 |
 | --- | --- | --- |
-| `-m`, `--mode` | 操作模式：`1`/`anytls`、`2`/`hy2`、`3`/`vless`、`4`/`full`、`5`/`uninstall`、`6`/`restore` | 交互菜单 |
+| `-m`, `--mode` | 操作模式：`1`/`anytls`、`2`/`hy2`、`3`/`vless`、`4`/`snell5`、`5`/`snell6`、`6`/`full`、`7`/`uninstall`、`8`/`restore`；协议可用逗号自由多选，如 `1,2,3` | 交互菜单 |
 | `--restore` | 直接恢复最近一次有效备份 | 关闭 |
 | `--config` | 选择 `merge` 增量合并、`keep` 沿用当前配置、`restore` 恢复最近备份或 `new` 生成新配置 | `merge` |
-| `--uninstall` | 卸载范围：`anytls`、`vless`、`hy2` 或 `all` | 卸载子菜单 |
+| `--uninstall` | 卸载范围：`anytls`、`vless`、`hy2`、`snell5`、`snell6` 或 `all` | 卸载子菜单 |
 | `--purge` | 卸载全部配置时同时删除 sing-box 软件包 | 关闭 |
 | `-y`, `--yes` | 跳过卸载确认，适合非交互执行 | 关闭 |
 | `-d`, `--domain` | REALITY 握手域名 | `www.apple.com` |
@@ -379,7 +390,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 | --- | --- | --- |
 | `HIGH_PORT_MIN` | 随机端口最小值 | `20000` |
 | `HIGH_PORT_MAX` | 随机端口最大值 | `65535` |
-| `INSTALL_MODE` | 安装模式 | 交互菜单 |
+| `INSTALL_MODE` | 安装模式；协议可用逗号自由多选，如 `1,2,3` | 交互菜单 |
 | `PORT` | 兼容旧脚本的监听端口；会按当前模式分配给对应协议 | 空 |
 | `ANYTLS_PORT` | AnyTLS TCP 监听端口 | `auto` |
 | `VLESS_DOMAIN` | VLESS REALITY 握手域名 | `www.apple.com` |

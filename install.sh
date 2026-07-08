@@ -313,8 +313,10 @@ usage() {
 用法：
   bash $0
   bash $0 --mode 1
+  bash $0 --mode 1,2,3
   bash $0 --mode 2
   bash $0 --mode vless
+  bash $0 anytls hy2 vless
   bash $0 --mode full
   bash $0 --restore
   bash $0 --uninstall anytls|vless|hy2|snell5|snell6|all
@@ -328,6 +330,9 @@ usage() {
   6, full       同时安装全部五种协议
   7, uninstall  彻底卸载全部配置和 sing-box
   8, restore    恢复最新的配置备份
+
+可自由多选协议，例如：--mode 1,2 或 --mode 1,2,3。
+也支持中文逗号、空格分隔和协议名混用，例如：--mode anytls,hy2,vless。
 
 重新安装选项（检测到现有配置时显示）：
       --config merge   增量合并本次协议到现有配置（默认）
@@ -372,7 +377,7 @@ Snell 选项：
       --snell6-mode   v6 流量模式：default、unshaped 或 unsafe-raw，默认：default
 
 通用选项：
-  -m, --mode          模式：1-8、anytls、vless、hy2、snell5、snell6、full、uninstall、restore
+  -m, --mode          模式：1-8、anytls、vless、hy2、snell5、snell6、full、uninstall、restore；协议可逗号多选
   -p, --port          当前单协议模式的端口；同时安装时请分别使用各协议端口选项
   -h, --help          显示帮助
 
@@ -389,6 +394,15 @@ Snell 选项：
 USAGE
 }
 
+append_install_mode() {
+  local mode="$1"
+  if [[ -z "$INSTALL_MODE" ]]; then
+    INSTALL_MODE="$mode"
+  else
+    INSTALL_MODE="${INSTALL_MODE},${mode}"
+  fi
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -m|--mode|--install)
@@ -396,35 +410,35 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     1|anytls|reality)
-      INSTALL_MODE="1"
+      append_install_mode "1"
       shift
       ;;
     2|hy2|hysteria2|surge)
-      INSTALL_MODE="2"
+      append_install_mode "2"
       shift
       ;;
     3|vless|vless-reality)
-      INSTALL_MODE="3"
+      append_install_mode "3"
       shift
       ;;
     4|snell5|snell-v5)
-      INSTALL_MODE="4"
+      append_install_mode "4"
       shift
       ;;
     5|snell6|snell-v6)
-      INSTALL_MODE="5"
+      append_install_mode "5"
       shift
       ;;
     6|full|all|all5|all-protocols)
-      INSTALL_MODE="6"
+      append_install_mode "6"
       shift
       ;;
     7|uninstall|remove)
-      INSTALL_MODE="7"
+      append_install_mode "7"
       shift
       ;;
     8|restore|backup)
-      INSTALL_MODE="8"
+      append_install_mode "8"
       shift
       ;;
     --restore)
@@ -567,9 +581,14 @@ while [[ $# -gt 0 ]]; do
       exit 0
       ;;
     *)
-      echo "未知选项：$1"
-      usage
-      exit 1
+      if [[ "$1" == *","* || "$1" == *"，"* || "$1" == *"、"* ]]; then
+        append_install_mode "$1"
+        shift
+      else
+        echo "未知选项：$1"
+        usage
+        exit 1
+      fi
       ;;
   esac
 done
@@ -590,57 +609,95 @@ choose_mode() {
     echo "  7) 彻底卸载全部配置和 sing-box（保留备份）"
     echo "  8) 恢复最新备份"
     echo
+    echo "提示：可多选协议，例如 1,2 或 1,2,3"
     read -rp "请输入选项 [1-8]：" INSTALL_MODE
   else
     echo "错误：非交互模式下必须指定安装模式"
-    echo "示例：bash $0 --mode full"
+    echo "示例：bash $0 --mode 1,2,3"
     exit 1
   fi
 }
 
 normalize_mode() {
+  local raw token normalized has_install=0 has_action=0
+  local -a mode_items
+
   if [[ "$ACTION" != "install" ]]; then
     return 0
   fi
 
-  case "$INSTALL_MODE" in
-    1|anytls|reality)
-      INSTALL_ANYTLS=1
-      ;;
-    2|hy2|hysteria2|surge)
-      INSTALL_HY2=1
-      ;;
-    3|vless|vless-reality)
-      INSTALL_VLESS=1
-      ;;
-    4|snell5|snell-v5)
-      INSTALL_SNELL5=1
-      ;;
-    5|snell6|snell-v6)
-      INSTALL_SNELL6=1
-      ;;
-    6|full|all|all5|all-protocols)
-      INSTALL_ANYTLS=1
-      INSTALL_VLESS=1
-      INSTALL_HY2=1
-      INSTALL_SNELL5=1
-      INSTALL_SNELL6=1
-      ;;
-    7|uninstall|remove)
-      ACTION="uninstall"
-      UNINSTALL_SCOPE="all"
-      PURGE_SING_BOX=1
-      ;;
-    8|restore|backup)
-      ACTION="restore"
-      CONFIG_POLICY="restore"
-      ;;
-    *)
+  raw="${INSTALL_MODE:-}"
+  raw="${raw//，/,}"
+  raw="${raw//、/,}"
+  raw="${raw//;/,}"
+  raw="${raw// /,}"
+  raw="${raw//$'\t'/,}"
+
+  IFS=',' read -r -a mode_items <<< "$raw"
+  for token in "${mode_items[@]}"; do
+    token="${token#"${token%%[![:space:]]*}"}"
+    token="${token%"${token##*[![:space:]]}"}"
+    [[ -n "$token" ]] || continue
+    normalized="$(printf '%s' "$token" | tr '[:upper:]' '[:lower:]')"
+
+    case "$normalized" in
+      1|anytls|reality)
+        INSTALL_ANYTLS=1
+        has_install=1
+        ;;
+      2|hy2|hysteria2|surge)
+        INSTALL_HY2=1
+        has_install=1
+        ;;
+      3|vless|vless-reality)
+        INSTALL_VLESS=1
+        has_install=1
+        ;;
+      4|snell5|snell-v5)
+        INSTALL_SNELL5=1
+        has_install=1
+        ;;
+      5|snell6|snell-v6)
+        INSTALL_SNELL6=1
+        has_install=1
+        ;;
+      6|full|all|all5|all-protocols)
+        INSTALL_ANYTLS=1
+        INSTALL_VLESS=1
+        INSTALL_HY2=1
+        INSTALL_SNELL5=1
+        INSTALL_SNELL6=1
+        has_install=1
+        ;;
+      7|uninstall|remove)
+        ACTION="uninstall"
+        UNINSTALL_SCOPE="all"
+        PURGE_SING_BOX=1
+        has_action=1
+        ;;
+      8|restore|backup)
+        ACTION="restore"
+        CONFIG_POLICY="restore"
+        has_action=1
+        ;;
+      *)
+        echo "错误：无效的安装模式：$token"
+        usage
+        exit 1
+        ;;
+    esac
+  done
+
+  if (( has_install && has_action )); then
+    echo "错误：安装协议不能和卸载/恢复选项同时选择：$INSTALL_MODE"
+    exit 1
+  fi
+
+  if (( ! has_install && ! has_action )); then
       echo "错误：无效的安装模式：$INSTALL_MODE"
       usage
       exit 1
-      ;;
-  esac
+  fi
 }
 
 choose_protocol_port() {
