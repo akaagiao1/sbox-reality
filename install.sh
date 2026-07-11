@@ -2155,6 +2155,35 @@ fetch_sing_box_alpine_url() {
     "$version" "$version" "$arch"
 }
 
+install_sing_box_openrc_service() {
+  mkdir -p /etc/sing-box /run/sing-box /var/log/sing-box
+
+  cat > /etc/init.d/sing-box << 'OPENRC'
+#!/sbin/openrc-run
+
+name="sing-box"
+description="sing-box service"
+command="/usr/local/bin/sing-box"
+command_args="run -c /etc/sing-box/config.json"
+command_background="yes"
+pidfile="/run/sing-box/sing-box.pid"
+output_log="/var/log/sing-box/sing-box.log"
+error_log="/var/log/sing-box/sing-box.log"
+
+depend() {
+  need net
+  after firewall
+}
+
+start_pre() {
+  checkpath --directory --mode 0755 /run/sing-box
+  checkpath --directory --mode 0755 /var/log/sing-box
+}
+OPENRC
+
+  chmod 0755 /etc/init.d/sing-box
+}
+
 install_sing_box_alpine() {
   local version="$1"
   local arch archive_url tmpdir archive_path binary_path
@@ -2186,6 +2215,7 @@ install_sing_box_alpine() {
 
   echo "正在安装 sing-box 到 /usr/local/bin/sing-box"
   install -m 0755 "$binary_path" /usr/local/bin/sing-box
+  install_sing_box_openrc_service
 
   rm -rf "$tmpdir"
 }
