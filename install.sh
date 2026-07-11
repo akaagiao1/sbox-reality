@@ -2113,12 +2113,12 @@ fetch_latest_alpha_version() {
   return 1
 }
 
-sing_box_apk_arch() {
+sing_box_alpine_arch() {
   local arch
   arch="$(uname -m)"
   case "$arch" in
     x86_64|amd64)
-      printf '%s' "x86_64"
+      printf '%s' "amd64"
       ;;
     aarch64|arm64)
       printf '%s' "arm64"
@@ -2133,7 +2133,7 @@ sing_box_apk_arch() {
   esac
 }
 
-fetch_sing_box_apk_url() {
+fetch_sing_box_alpine_url() {
   local version="$1"
   local arch="$2"
   local payload url
@@ -2141,7 +2141,7 @@ fetch_sing_box_apk_url() {
   if payload="$(curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors \
     --connect-timeout 10 --max-time 60 \
     "https://api.github.com/repos/SagerNet/sing-box/releases/tags/v${version}")"; then
-    url="$(printf '%s' "$payload" | jq -r --arg suffix "_linux_${arch}.apk" '
+    url="$(printf '%s' "$payload" | jq -r --arg suffix "-linux-${arch}-musl.tar.gz" '
       .assets[]?.browser_download_url
       | select(endswith($suffix))
     ' | head -n 1)"
@@ -2151,32 +2151,41 @@ fetch_sing_box_apk_url() {
     fi
   fi
 
-  printf 'https://github.com/SagerNet/sing-box/releases/download/v%s/sing-box_%s_linux_%s.apk' \
+  printf 'https://github.com/SagerNet/sing-box/releases/download/v%s/sing-box-%s-linux-%s-musl.tar.gz' \
     "$version" "$version" "$arch"
 }
 
 install_sing_box_alpine() {
   local version="$1"
-  local arch apk_url tmpdir apk_path
+  local arch archive_url tmpdir archive_path binary_path
 
-  arch="$(sing_box_apk_arch)"
-  apk_url="$(fetch_sing_box_apk_url "$version" "$arch")"
+  arch="$(sing_box_alpine_arch)"
+  archive_url="$(fetch_sing_box_alpine_url "$version" "$arch")"
   tmpdir="$(mktemp -d)"
-  apk_path="${tmpdir}/sing-box_${version}_linux_${arch}.apk"
+  archive_path="${tmpdir}/sing-box.tar.gz"
 
-  echo "Downloading ${apk_url}"
+  echo "Downloading ${archive_url}"
   if ! curl -fL --retry 3 --retry-delay 2 --retry-all-errors \
     --connect-timeout 10 --max-time 120 \
-    -o "$apk_path" "$apk_url"; then
+    -o "$archive_path" "$archive_url"; then
     rm -rf "$tmpdir"
     return 1
   fi
 
-  echo "apk add --allow-untrusted ${apk_path}"
-  if ! apk add --allow-untrusted "$apk_path"; then
+  if ! tar -xzf "$archive_path" -C "$tmpdir"; then
     rm -rf "$tmpdir"
     return 1
   fi
+
+  binary_path="$(find "$tmpdir" -type f -name sing-box | head -n 1)"
+  if [[ -z "$binary_path" ]] || ! "$binary_path" version >/dev/null 2>&1; then
+    echo "错误：下载的 sing-box Alpine 二进制无效" >&2
+    rm -rf "$tmpdir"
+    return 1
+  fi
+
+  echo "正在安装 sing-box 到 /usr/local/bin/sing-box"
+  install -m 0755 "$binary_path" /usr/local/bin/sing-box
 
   rm -rf "$tmpdir"
 }
