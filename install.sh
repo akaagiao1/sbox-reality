@@ -2113,6 +2113,74 @@ fetch_latest_alpha_version() {
   return 1
 }
 
+sing_box_apk_arch() {
+  local arch
+  arch="$(uname -m)"
+  case "$arch" in
+    x86_64|amd64)
+      printf '%s' "x86_64"
+      ;;
+    aarch64|arm64)
+      printf '%s' "arm64"
+      ;;
+    armv7l|armv7)
+      printf '%s' "armv7"
+      ;;
+    *)
+      echo "错误：暂不支持当前 Alpine 架构：$arch" >&2
+      return 1
+      ;;
+  esac
+}
+
+fetch_sing_box_apk_url() {
+  local version="$1"
+  local arch="$2"
+  local payload url
+
+  if payload="$(curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors \
+    --connect-timeout 10 --max-time 60 \
+    "https://api.github.com/repos/SagerNet/sing-box/releases/tags/v${version}")"; then
+    url="$(printf '%s' "$payload" | jq -r --arg suffix "_linux_${arch}.apk" '
+      .assets[]?.browser_download_url
+      | select(endswith($suffix))
+    ' | head -n 1)"
+    if [[ -n "$url" && "$url" != "null" ]]; then
+      printf '%s' "$url"
+      return 0
+    fi
+  fi
+
+  printf 'https://github.com/SagerNet/sing-box/releases/download/v%s/sing-box_%s_linux_%s.apk' \
+    "$version" "$version" "$arch"
+}
+
+install_sing_box_alpine() {
+  local version="$1"
+  local arch apk_url tmpdir apk_path
+
+  arch="$(sing_box_apk_arch)"
+  apk_url="$(fetch_sing_box_apk_url "$version" "$arch")"
+  tmpdir="$(mktemp -d)"
+  apk_path="${tmpdir}/sing-box_${version}_linux_${arch}.apk"
+
+  echo "Downloading ${apk_url}"
+  if ! curl -fL --retry 3 --retry-delay 2 --retry-all-errors \
+    --connect-timeout 10 --max-time 120 \
+    -o "$apk_path" "$apk_url"; then
+    rm -rf "$tmpdir"
+    return 1
+  fi
+
+  echo "apk add --allow-untrusted ${apk_path}"
+  if ! apk add --allow-untrusted "$apk_path"; then
+    rm -rf "$tmpdir"
+    return 1
+  fi
+
+  rm -rf "$tmpdir"
+}
+
 install_dependencies() {
   local alpha_version attempt installed=0
 
@@ -2129,9 +2197,15 @@ install_dependencies() {
   fi
   echo "正在安装 sing-box v${alpha_version}……"
   for attempt in 1 2 3; do
-    if curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors \
-      --connect-timeout 10 --max-time 60 https://sing-box.app/install.sh \
-      | sh -s -- --version "$alpha_version"; then
+    if {
+      if [[ "$PLATFORM" == "alpine" ]]; then
+        install_sing_box_alpine "$alpha_version"
+      else
+        curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors \
+          --connect-timeout 10 --max-time 60 https://sing-box.app/install.sh \
+          | sh -s -- --version "$alpha_version"
+      fi
+    } && resolve_sing_box_binary; then
       installed=1
       break
     fi
@@ -2141,7 +2215,7 @@ install_dependencies() {
     fi
   done
   hash -r
-  if (( ! installed )) || ! resolve_sing_box_binary; then
+  if (( ! installed )); then
     echo "错误：sing-box v${alpha_version} 安装失败，请稍后重试"
     exit 1
   fi
