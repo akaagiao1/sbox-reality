@@ -10,6 +10,7 @@
 - **Snell v5（Surge）**
 - **Snell v6（Surge Beta）**
 - **同时安装多个入站到同一个 sing-box 配置**
+- **默认开启 BBR + fq，并写入持久化 sysctl 配置**
 - **按协议卸载、保留配置重装或生成全新配置**
 
 本项目支持 Debian、Ubuntu 和 Alpine Linux VPS，默认自动选择一个当前未被占用的随机高端口，完成服务端部署，并生成可直接合并到客户端配置中的 `outbounds` 片段。

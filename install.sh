@@ -63,6 +63,7 @@ SNELL6_INFO="$OUTPUT_DIR/snell-v6-info.txt"
 SNELL_SURGE_CONF="$OUTPUT_DIR/snell-surge.conf"
 COMBINED_INFO="$OUTPUT_DIR/all-info.txt"
 BACKUP_ROOT="/root/sbox-reality-backups"
+BBR_SYSCTL_CONF="/etc/sysctl.d/99-sbox-reality-bbr.conf"
 
 PORT_ENV="/etc/sing-box/hy2-port-hopping.env"
 PORT_HELPER="/usr/local/bin/sing-box-hy2-port-hopping"
@@ -2228,7 +2229,7 @@ install_dependencies() {
     apk add --no-cache bash curl openssl ca-certificates iproute2 coreutils jq nftables iptables openrc
   else
     apt update
-    apt install -y curl openssl ca-certificates iproute2 coreutils jq nftables iptables
+    apt install -y curl openssl ca-certificates iproute2 coreutils jq nftables iptables procps
   fi
   if ! alpha_version="$(fetch_latest_alpha_version)"; then
     echo "错误：获取 sing-box 最新 alpha 版本失败"
@@ -2273,6 +2274,36 @@ generate_anytls_secrets() {
   if [[ -z "$ANYTLS_PRIVATE_KEY" || -z "$ANYTLS_PUBLIC_KEY" || -z "$ANYTLS_PASSWORD" || -z "$ANYTLS_SHORT_ID" ]]; then
     echo "错误：生成 AnyTLS + REALITY 密钥失败"
     exit 1
+  fi
+}
+
+enable_bbr_and_fq() {
+  local current_qdisc current_congestion
+
+  echo "正在开启 BBR 和 fq……"
+  mkdir -p "$(dirname "$BBR_SYSCTL_CONF")"
+  cat > "$BBR_SYSCTL_CONF" << 'SYSCTL'
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+SYSCTL
+
+  if command -v modprobe >/dev/null 2>&1; then
+    modprobe tcp_bbr >/dev/null 2>&1 || true
+  fi
+
+  if ! sysctl -w net.core.default_qdisc=fq >/dev/null 2>&1; then
+    echo "警告：当前内核或虚拟化环境暂时无法启用 fq，已保留开机配置"
+  fi
+  if ! sysctl -w net.ipv4.tcp_congestion_control=bbr >/dev/null 2>&1; then
+    echo "警告：当前内核未开放 BBR，已保留开机配置，脚本将继续安装"
+  fi
+
+  current_qdisc="$(sysctl -n net.core.default_qdisc 2>/dev/null || true)"
+  current_congestion="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || true)"
+  if [[ "$current_qdisc" == "fq" && "$current_congestion" == "bbr" ]]; then
+    echo "BBR 和 fq 已开启"
+  else
+    echo "当前状态：qdisc=${current_qdisc:-未知}，拥塞控制=${current_congestion:-未知}"
   fi
 }
 
@@ -3089,6 +3120,7 @@ main() {
   echo
 
   install_dependencies
+  enable_bbr_and_fq
   verify_snell_support
 
   if (( INSTALL_ANYTLS )); then
