@@ -9,6 +9,7 @@
 - **Hysteria2 + Surge 端口跳跃**
 - **Snell v5（Surge）**
 - **Snell v6（Surge Beta）**
+- **Direct UDP 固定目标中转**
 - **同时安装多个入站到同一个 sing-box 配置**
 - **默认开启 BBR + fq，并写入持久化 sysctl 配置**
 - **按协议卸载、保留配置重装或生成全新配置**
@@ -45,9 +46,12 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 6) 同时安装全部五种协议
 7) 彻底卸载全部配置和 sing-box（保留备份）
 8) 恢复最新备份
+9) 安装 Direct UDP 中转
 ```
 
 菜单支持自由多选安装协议：例如输入 `1,2` 会同时安装 AnyTLS 和 Hysteria2；输入 `1,2,3` 会同时安装 AnyTLS、Hysteria2 和 VLESS。也支持中文逗号 `1，2，3`。
+
+Direct UDP 中转可通过选项 `9` 安装，监听端口支持自动选择随机高端口或手动指定，目标地址和目标端口必须由用户填写。该入站不提供加密或认证，请只向可信来源开放。
 
 选择安装协议后，脚本还会询问端口方式：输入 `1` 或直接回车自动选择未占用的高端口；输入 `2` 可手动填写 NAT 机器映射给你的自定义端口。自定义端口已被占用时会提示改用其他端口；一次安装多个协议时会分别询问各协议端口。
 
