@@ -63,7 +63,7 @@ VLESS_INFO="$OUTPUT_DIR/vless-info.txt"
 HY2_INFO="$OUTPUT_DIR/hysteria2-info.txt"
 SNELL5_INFO="$OUTPUT_DIR/snell-v5-info.txt"
 SNELL6_INFO="$OUTPUT_DIR/snell-v6-info.txt"
-DIRECT_INFO="$OUTPUT_DIR/direct-udp-info.txt"
+DIRECT_INFO="$OUTPUT_DIR/direct-info.txt"
 SNELL_SURGE_CONF="$OUTPUT_DIR/snell-surge.conf"
 COMBINED_INFO="$OUTPUT_DIR/all-info.txt"
 BACKUP_ROOT="/root/sbox-reality-backups"
@@ -214,6 +214,7 @@ prepare_output_dir() {
 /root/hysteria2-surge-info.txt|$HY2_INFO
 /root/snell-v5-surge-info.txt|$SNELL5_INFO
 /root/snell-v6-surge-info.txt|$SNELL6_INFO
+/root/sing-box/direct-udp-info.txt|$DIRECT_INFO
 /root/surge-snell.conf|$SNELL_SURGE_CONF
 /root/sbox-reality-info.txt|$COMBINED_INFO
 MIGRATE
@@ -337,7 +338,7 @@ usage() {
   6, full       同时安装全部五种协议
   7, uninstall  彻底卸载全部配置和 sing-box
   8, restore    恢复最新的配置备份
-  9, direct     安装 Direct UDP 中转
+  9, direct     安装 Direct 固定目标中转
 
 可自由多选协议，例如：--mode 1,2 或 --mode 1,2,3。
 也支持中文逗号、空格分隔和协议名混用，例如：--mode anytls,hy2,vless。
@@ -384,8 +385,8 @@ Snell 选项：
       --snell5-obfs   v5 HTTP 混淆：none 或 http，默认：none
       --snell6-mode   v6 流量模式：default、unshaped 或 unsafe-raw，默认：default
 
-Direct UDP 中转选项：
-      --direct-port        UDP 监听端口，默认：自动选择
+Direct 固定目标中转选项：
+      --direct-port        TCP/UDP 监听端口，默认：自动选择
       --direct-address     中转目标地址，必须指定
       --direct-target-port 中转目标端口，必须指定
 
@@ -638,7 +639,7 @@ choose_mode() {
     echo "  6) 同时安装全部五种协议"
     echo "  7) 彻底卸载全部配置和 sing-box（保留备份）"
     echo "  8) 恢复最新备份"
-    echo "  9) 安装 Direct UDP 中转"
+    echo "  9) 安装 Direct 固定目标中转"
     echo
     echo "提示：可多选协议，例如 1,2 或 1,2,3"
     read -rp "请输入选项 [1-9]：" INSTALL_MODE
@@ -846,7 +847,7 @@ choose_install_ports() {
   (( INSTALL_VLESS )) && choose_protocol_port "VLESS" "VLESS_PORT" "tcp"
   (( INSTALL_SNELL5 )) && choose_protocol_port "Snell v5" "SNELL5_PORT" "tcp"
   (( INSTALL_SNELL6 )) && choose_protocol_port "Snell v6" "SNELL6_PORT" "tcp"
-  (( INSTALL_DIRECT )) && choose_protocol_port "Direct UDP 中转" "DIRECT_PORT" "udp"
+  (( INSTALL_DIRECT )) && choose_protocol_port "Direct 固定目标中转" "DIRECT_PORT" "udp"
 
   if (( INSTALL_DIRECT )) && [[ -t 0 ]]; then
     local input
@@ -877,7 +878,7 @@ choose_uninstall_scope() {
       echo "  3) 仅 Hysteria2 + 端口跳跃"
       echo "  4) 仅 Snell v5"
       echo "  5) 仅 Snell v6"
-      echo "  6) 仅 Direct UDP 中转"
+      echo "  6) 仅 Direct 固定目标中转"
       echo "  7) 全部卸载"
       echo
       read -rp "请输入选项 [1-7]：" UNINSTALL_SCOPE
@@ -1027,6 +1028,27 @@ pick_random_free_high_udp_port() {
   done
 
   echo "错误：在 ${HIGH_PORT_MIN}-${HIGH_PORT_MAX} 范围内未找到可用的 UDP 高端口" >&2
+  exit 1
+}
+
+pick_random_free_high_direct_port() {
+  local candidate
+  local range=$(( HIGH_PORT_MAX - HIGH_PORT_MIN + 1 ))
+
+  if (( HIGH_PORT_MIN < 1024 || HIGH_PORT_MIN > HIGH_PORT_MAX || HIGH_PORT_MAX > 65535 )); then
+    echo "错误：无效的高端口范围：${HIGH_PORT_MIN}-${HIGH_PORT_MAX}" >&2
+    exit 1
+  fi
+
+  for _ in $(seq 1 100); do
+    candidate=$(( HIGH_PORT_MIN + $(random_number) % range ))
+    if ! is_tcp_port_in_use "$candidate" && ! is_udp_port_in_use_by_other "$candidate"; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+
+  echo "错误：在 ${HIGH_PORT_MIN}-${HIGH_PORT_MAX} 范围内未找到 TCP/UDP 均可用的高端口" >&2
   exit 1
 }
 
@@ -2173,20 +2195,33 @@ prepare_inputs() {
     fi
 
     if [[ -z "$DIRECT_PORT" || "$DIRECT_PORT" == "auto" || "$DIRECT_PORT" == "random" ]]; then
-      DIRECT_PORT="$(pick_random_free_high_udp_port)"
-      while (( INSTALL_HY2 )) && [[ "$DIRECT_PORT" == "$HY2_PORT" ]]; do
-        DIRECT_PORT="$(pick_random_free_high_udp_port)"
+      DIRECT_PORT="$(pick_random_free_high_direct_port)"
+      while { (( INSTALL_HY2 )) && [[ "$DIRECT_PORT" == "$HY2_PORT" ]]; } \
+        || { (( INSTALL_ANYTLS )) && [[ "$DIRECT_PORT" == "$ANYTLS_PORT" ]]; } \
+        || { (( INSTALL_VLESS )) && [[ "$DIRECT_PORT" == "$VLESS_PORT" ]]; } \
+        || { (( INSTALL_SNELL5 )) && [[ "$DIRECT_PORT" == "$SNELL5_PORT" ]]; } \
+        || { (( INSTALL_SNELL6 )) && [[ "$DIRECT_PORT" == "$SNELL6_PORT" ]]; }; do
+        DIRECT_PORT="$(pick_random_free_high_direct_port)"
       done
       DIRECT_PORT_MODE="自动随机"
     elif validate_port "$DIRECT_PORT"; then
       DIRECT_PORT_MODE="手动指定"
     else
-      echo "错误：无效的 Direct UDP 监听端口：$DIRECT_PORT"
+      echo "错误：无效的 Direct 监听端口：$DIRECT_PORT"
       exit 1
     fi
 
-    if (( INSTALL_HY2 )) && [[ "$DIRECT_PORT" == "$HY2_PORT" ]]; then
-      echo "错误：Direct UDP 监听端口不能与 Hysteria2 监听端口相同：$DIRECT_PORT"
+    if { (( INSTALL_HY2 )) && [[ "$DIRECT_PORT" == "$HY2_PORT" ]]; } \
+      || { (( INSTALL_ANYTLS )) && [[ "$DIRECT_PORT" == "$ANYTLS_PORT" ]]; } \
+      || { (( INSTALL_VLESS )) && [[ "$DIRECT_PORT" == "$VLESS_PORT" ]]; } \
+      || { (( INSTALL_SNELL5 )) && [[ "$DIRECT_PORT" == "$SNELL5_PORT" ]]; } \
+      || { (( INSTALL_SNELL6 )) && [[ "$DIRECT_PORT" == "$SNELL6_PORT" ]]; }; then
+      echo "错误：Direct 监听端口与本次安装的其他入站端口重复：$DIRECT_PORT"
+      exit 1
+    fi
+    if is_tcp_port_in_use_by_other "$DIRECT_PORT"; then
+      echo "错误：TCP 端口 $DIRECT_PORT 已被其他进程占用"
+      ss -H -lntp 2>/dev/null | awk -v p="$DIRECT_PORT" '$4 ~ ":" p "$" {print}' || true
       exit 1
     fi
     if is_udp_port_in_use_by_other "$DIRECT_PORT"; then
@@ -2565,7 +2600,6 @@ direct_inbound_json() {
       "tag": "direct-in",
       "listen": "::",
       "listen_port": ${DIRECT_PORT},
-      "network": "udp",
       "override_address": "${DIRECT_TARGET_ADDRESS}",
       "override_port": ${DIRECT_TARGET_PORT}
     }
@@ -2899,7 +2933,7 @@ sbox-reality 统一安装完成
   已安装 Hysteria2 + Surge：$has_hy2
   已安装 Snell v5：$has_snell5
   已安装 Snell v6：$has_snell6
-  已安装 Direct UDP 中转：$has_direct
+  已安装 Direct 固定目标中转：$has_direct
 TXT
 
   if (( INSTALL_ANYTLS )); then
@@ -3109,17 +3143,17 @@ TXT
 
   if (( INSTALL_DIRECT )); then
     cat > "$DIRECT_INFO" << TXT
-Direct UDP 中转安装完成
+Direct 固定目标中转安装完成
 
 服务端：
   配置文件：$SERVER_CONF
-  UDP 监听端口：$DIRECT_PORT
+  TCP/UDP 监听端口：$DIRECT_PORT
   端口模式：$DIRECT_PORT_MODE
   中转目标：${DIRECT_TARGET_ADDRESS}:${DIRECT_TARGET_PORT}
 
 使用方式：
-  将原始 UDP 流量发送到 ${SERVER_IP}:${DIRECT_PORT}，sing-box 会转发到 ${DIRECT_TARGET_ADDRESS}:${DIRECT_TARGET_PORT}。
-  请在服务器防火墙和 NAT 映射中放行 UDP 端口 $DIRECT_PORT。
+  将流量发送到 ${SERVER_IP}:${DIRECT_PORT}，sing-box 会转发到 ${DIRECT_TARGET_ADDRESS}:${DIRECT_TARGET_PORT}。
+  请按实际用途在服务器防火墙和 NAT 映射中放行 TCP/UDP 端口 $DIRECT_PORT。
 
 安全提示：
   Direct 入站不提供加密或认证，请仅开放给可信来源，避免成为公开 UDP 转发器。
@@ -3247,7 +3281,7 @@ main() {
   echo "  安装 Hysteria2 + Surge：$INSTALL_HY2"
   echo "  安装 Snell v5：$INSTALL_SNELL5"
   echo "  安装 Snell v6：$INSTALL_SNELL6"
-  echo "  安装 Direct UDP 中转：$INSTALL_DIRECT"
+  echo "  安装 Direct 固定目标中转：$INSTALL_DIRECT"
   if (( INSTALL_ANYTLS )); then
     echo "  AnyTLS 域名：$REALITY_DOMAIN"
     echo "  AnyTLS 端口：$ANYTLS_PORT ($ANYTLS_PORT_MODE)"
@@ -3275,8 +3309,8 @@ main() {
     echo "  Snell v6 模式：$SNELL6_MODE"
   fi
   if (( INSTALL_DIRECT )); then
-    echo "  Direct UDP 监听端口：$DIRECT_PORT ($DIRECT_PORT_MODE)"
-    echo "  Direct UDP 中转目标：${DIRECT_TARGET_ADDRESS}:${DIRECT_TARGET_PORT}"
+    echo "  Direct 监听端口：$DIRECT_PORT ($DIRECT_PORT_MODE)"
+    echo "  Direct 中转目标：${DIRECT_TARGET_ADDRESS}:${DIRECT_TARGET_PORT}"
   fi
   echo
 
