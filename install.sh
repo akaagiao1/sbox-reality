@@ -2700,13 +2700,73 @@ JSON
 }
 
 validate_existing_server_config() {
+  local normalized backup
+
   [[ "$CONFIG_POLICY" == "merge" && -s "$SERVER_CONF" ]] || return 0
 
-  if ! jq -e . "$SERVER_CONF" >/dev/null; then
-    echo "错误：现有 $SERVER_CONF 不是有效 JSON，无法安全追加新协议"
-    echo "请修复配置，或使用 --config new 生成全新配置"
-    exit 1
+  if jq -e . "$SERVER_CONF" >/dev/null 2>&1; then
+    return 0
   fi
+
+  # sing-box accepts JSONC, while jq only accepts strict JSON.  Verify the
+  # original with sing-box first, then remove comments outside quoted strings.
+  # This keeps values such as https:// URLs and passwords containing // intact.
+  if run_sing_box check -c "$SERVER_CONF" >/dev/null 2>&1; then
+    normalized="$(mktemp)"
+    awk '
+      BEGIN { in_string = 0; escaped = 0; in_block = 0 }
+      {
+        output = ""
+        for (i = 1; i <= length($0); i++) {
+          c = substr($0, i, 1)
+          next_c = (i < length($0) ? substr($0, i + 1, 1) : "")
+
+          if (in_block) {
+            if (c == "*" && next_c == "/") {
+              in_block = 0
+              i++
+            }
+            continue
+          }
+
+          if (in_string) {
+            output = output c
+            if (escaped) escaped = 0
+            else if (c == "\\") escaped = 1
+            else if (c == "\"") in_string = 0
+            continue
+          }
+
+          if (c == "\"") {
+            in_string = 1
+            output = output c
+          } else if (c == "/" && next_c == "/") {
+            break
+          } else if (c == "/" && next_c == "*") {
+            in_block = 1
+            i++
+          } else {
+            output = output c
+          }
+        }
+        print output
+      }
+    ' "$SERVER_CONF" > "$normalized"
+
+    if jq -e . "$normalized" >/dev/null 2>&1; then
+      backup="${SERVER_CONF}.jsonc.bak.$(date +%Y%m%d-%H%M%S)"
+      cp -p "$SERVER_CONF" "$backup"
+      install -m 600 "$normalized" "$SERVER_CONF"
+      rm -f "$normalized"
+      echo "检测到 JSONC 注释，已转换为标准 JSON；原配置备份：$backup"
+      return 0
+    fi
+    rm -f "$normalized"
+  fi
+
+  echo "错误：现有 $SERVER_CONF 无法被 sing-box 或 jq 正确解析，无法安全追加新协议"
+  echo "请修复配置，或使用 --config new 生成全新配置"
+  exit 1
 }
 
 write_server_config() {
