@@ -264,7 +264,10 @@ install_jq() {
     apk add --no-cache jq
   else
     apt update
-    apt install -y jq
+    DEBIAN_FRONTEND=noninteractive apt install -y \
+      -o Dpkg::Options::="--force-confdef" \
+      -o Dpkg::Options::="--force-confold" \
+      jq
   fi
 }
 
@@ -2366,14 +2369,17 @@ install_sing_box_alpine() {
 }
 
 install_dependencies() {
-  local alpha_version attempt installed=0
+  local alpha_version attempt installed=0 dpkg_wrapper_dir="" real_dpkg=""
 
   echo "正在安装依赖……"
   if [[ "$PLATFORM" == "alpine" ]]; then
     apk add --no-cache bash curl openssl ca-certificates iproute2 coreutils jq nftables iptables openrc
   else
     apt update
-    apt install -y curl openssl ca-certificates iproute2 coreutils jq nftables iptables procps
+    DEBIAN_FRONTEND=noninteractive apt install -y \
+      -o Dpkg::Options::="--force-confdef" \
+      -o Dpkg::Options::="--force-confold" \
+      curl openssl ca-certificates iproute2 coreutils jq nftables iptables procps
   fi
   if ! alpha_version="$(fetch_latest_alpha_version)"; then
     echo "错误：获取 sing-box 最新 alpha 版本失败"
@@ -2385,9 +2391,30 @@ install_dependencies() {
       if [[ "$PLATFORM" == "alpine" ]]; then
         install_sing_box_alpine "$alpha_version"
       else
-        curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors \
+        # The upstream installer calls `dpkg -i` directly.  When this script is
+        # launched with bash <(curl ...), dpkg cannot read an answer to a
+        # conffile prompt and aborts with "end of file on stdin".  Put a small
+        # dpkg wrapper first in PATH so upgrades keep the user's config without
+        # prompting.  --force-confdef also makes dpkg use its default for any
+        # other conffile decision.
+        real_dpkg="$(command -v dpkg)"
+        dpkg_wrapper_dir="$(mktemp -d)"
+        cat > "$dpkg_wrapper_dir/dpkg" << WRAPPER
+#!/bin/sh
+exec "$real_dpkg" --force-confdef --force-confold "\$@"
+WRAPPER
+        chmod 755 "$dpkg_wrapper_dir/dpkg"
+
+        if ! curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors \
           --connect-timeout 10 --max-time 60 https://sing-box.app/install.sh \
-          | sh -s -- --version "$alpha_version"
+          | env DEBIAN_FRONTEND=noninteractive PATH="$dpkg_wrapper_dir:$PATH" \
+            sh -s -- --version "$alpha_version"; then
+          rm -rf -- "$dpkg_wrapper_dir"
+          dpkg_wrapper_dir=""
+          false
+        fi
+        rm -rf -- "$dpkg_wrapper_dir"
+        dpkg_wrapper_dir=""
       fi
     } && resolve_sing_box_binary; then
       installed=1
@@ -2400,6 +2427,7 @@ install_dependencies() {
   done
   hash -r
   if (( ! installed )); then
+    [[ -z "$dpkg_wrapper_dir" ]] || rm -rf -- "$dpkg_wrapper_dir"
     echo "错误：sing-box v${alpha_version} 安装失败，请稍后重试"
     exit 1
   fi
@@ -2671,6 +2699,16 @@ ${inbounds}
 JSON
 }
 
+validate_existing_server_config() {
+  [[ "$CONFIG_POLICY" == "merge" && -s "$SERVER_CONF" ]] || return 0
+
+  if ! jq -e . "$SERVER_CONF" >/dev/null; then
+    echo "错误：现有 $SERVER_CONF 不是有效 JSON，无法安全追加新协议"
+    echo "请修复配置，或使用 --config new 生成全新配置"
+    exit 1
+  fi
+}
+
 write_server_config() {
   local selected_file temp_config
 
@@ -2679,11 +2717,7 @@ write_server_config() {
     return 0
   fi
 
-  if ! jq -e . "$SERVER_CONF" >/dev/null; then
-    echo "错误：现有 $SERVER_CONF 不是有效 JSON，无法安全追加新协议"
-    echo "请修复配置，或使用 --config new 生成全新配置"
-    exit 1
-  fi
+  validate_existing_server_config
 
   selected_file="$(mktemp)"
   temp_config="$(mktemp)"
@@ -3315,6 +3349,7 @@ main() {
   echo
 
   install_dependencies
+  validate_existing_server_config
   enable_bbr_and_fq
   verify_snell_support
 
