@@ -27,6 +27,7 @@ DIRECT_TARGET_ADDRESS="${DIRECT_TARGET_ADDRESS:-}"
 DIRECT_TARGET_PORT="${DIRECT_TARGET_PORT:-}"
 HIGH_PORT_MIN="${HIGH_PORT_MIN:-20000}"
 HIGH_PORT_MAX="${HIGH_PORT_MAX:-65535}"
+SING_BOX_VERSION_SERIES="${SING_BOX_VERSION_SERIES:-1.14}"
 
 HY2_SNI="${HY2_SNI:-${SNI:-www.bing.com}}"
 HY2_PORT="${HY2_PORT:-auto}"
@@ -404,7 +405,7 @@ Direct 固定目标中转选项：
   VLESS_DOMAIN, VLESS_PORT, SNELL5_PORT, SNELL6_PORT,
   DIRECT_PORT, DIRECT_TARGET_ADDRESS, DIRECT_TARGET_PORT,
   SNELL5_OBFS_MODE, SNELL6_MODE,
-  HIGH_PORT_MIN, HIGH_PORT_MAX,
+  HIGH_PORT_MIN, HIGH_PORT_MAX, SING_BOX_VERSION_SERIES,
   HY2_SNI, SNI, HY2_PORT, HY2_PORT_HOPPING, HOP_PORTS, HOP_INTERVAL,
   UP_MBPS, DOWN_MBPS, OBFS, OBFS_PASSWORD,
   GECKO_MIN_PACKET_SIZE, GECKO_MAX_PACKET_SIZE,
@@ -2235,7 +2236,7 @@ prepare_inputs() {
   fi
 }
 
-fetch_latest_alpha_version() {
+fetch_preferred_sing_box_version() {
   local url payload version
   local -a sources=(
     "https://api.github.com/repos/SagerNet/sing-box/releases?per_page=30"
@@ -2248,8 +2249,12 @@ fetch_latest_alpha_version() {
       --connect-timeout 10 --max-time 60 "$url")"; then
       version="$(printf '%s' "$payload" | jq -r '
         .. | strings
-        | select(test("^v?[0-9]+\\.[0-9]+\\.[0-9]+-alpha\\.[0-9]+$"))
-      ' | sed 's/^v//' | sort -V | tail -n 1)"
+      ' | sed 's/^v//' | awk -v series="$SING_BOX_VERSION_SERIES" '
+        $0 ~ ("^" series "\\.[0-9]+$") { print "4|" $0; next }
+        $0 ~ ("^" series "\\.[0-9]+-rc\\.[0-9]+$") { print "3|" $0; next }
+        $0 ~ ("^" series "\\.[0-9]+-beta\\.[0-9]+$") { print "2|" $0; next }
+        $0 ~ ("^" series "\\.[0-9]+-alpha\\.[0-9]+$") { print "1|" $0 }
+      ' | sort -t '|' -k1,1n -k2,2V | tail -n 1 | cut -d '|' -f 2-)"
       if [[ -n "$version" ]]; then
         printf '%s' "$version"
         return 0
@@ -2369,7 +2374,7 @@ install_sing_box_alpine() {
 }
 
 install_dependencies() {
-  local alpha_version attempt installed=0 dpkg_wrapper_dir="" real_dpkg=""
+  local release_version attempt installed=0 dpkg_wrapper_dir="" real_dpkg=""
 
   echo "正在安装依赖……"
   if [[ "$PLATFORM" == "alpine" ]]; then
@@ -2381,15 +2386,15 @@ install_dependencies() {
       -o Dpkg::Options::="--force-confold" \
       curl openssl ca-certificates iproute2 coreutils jq nftables iptables procps
   fi
-  if ! alpha_version="$(fetch_latest_alpha_version)"; then
-    echo "错误：获取 sing-box 最新 alpha 版本失败"
+  if ! release_version="$(fetch_preferred_sing_box_version)"; then
+    echo "错误：获取 sing-box ${SING_BOX_VERSION_SERIES}.x 推荐版本失败"
     exit 1
   fi
-  echo "正在安装 sing-box v${alpha_version}……"
+  echo "正在安装 sing-box v${release_version}……"
   for attempt in 1 2 3; do
     if {
       if [[ "$PLATFORM" == "alpine" ]]; then
-        install_sing_box_alpine "$alpha_version"
+        install_sing_box_alpine "$release_version"
       else
         # The upstream installer calls `dpkg -i` directly.  When this script is
         # launched with bash <(curl ...), dpkg cannot read an answer to a
@@ -2408,7 +2413,7 @@ WRAPPER
         if ! curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors \
           --connect-timeout 10 --max-time 60 https://sing-box.app/install.sh \
           | env DEBIAN_FRONTEND=noninteractive PATH="$dpkg_wrapper_dir:$PATH" \
-            sh -s -- --version "$alpha_version"; then
+            sh -s -- --version "$release_version"; then
           rm -rf -- "$dpkg_wrapper_dir"
           dpkg_wrapper_dir=""
           false
@@ -2428,7 +2433,7 @@ WRAPPER
   hash -r
   if (( ! installed )); then
     [[ -z "$dpkg_wrapper_dir" ]] || rm -rf -- "$dpkg_wrapper_dir"
-    echo "错误：sing-box v${alpha_version} 安装失败，请稍后重试"
+    echo "错误：sing-box v${release_version} 安装失败，请稍后重试"
     exit 1
   fi
   mkdir -p /etc/sing-box

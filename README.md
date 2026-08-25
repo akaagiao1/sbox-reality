@@ -16,7 +16,7 @@
 
 本项目支持 Debian、Ubuntu 和 Alpine Linux VPS，默认自动选择一个当前未被占用的随机高端口，完成服务端部署，并生成可直接合并到客户端配置中的 `outbounds` 片段。
 
-脚本会从 sing-box 官方 Releases 自动选择并安装最新 alpha 版本，以支持 Hysteria2 Gecko 等最新功能。
+脚本会从 sing-box 官方 Releases 自动选择 1.14 系列的推荐版本，优先级为正式版、RC、Beta、Alpha，以支持 Hysteria2 Gecko 等新功能并及时获得后续修复。可通过 `SING_BOX_VERSION_SERIES` 切换目标版本系列。
 
 ---
 
@@ -160,7 +160,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 
 ## Snell v5 / v6
 
-脚本使用 sing-box 1.14 最新 alpha 版提供 Snell 服务端，两个版本均默认选择未占用的随机 TCP 高端口，并生成 Surge 配置片段：
+脚本使用 sing-box 1.14 系列当前成熟度最高的版本提供 Snell 服务端，两个版本均默认选择未占用的随机 TCP 高端口，并生成 Surge 配置片段：
 
 ```bash
 # Snell v5
