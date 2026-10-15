@@ -27,7 +27,6 @@ DIRECT_TARGET_ADDRESS="${DIRECT_TARGET_ADDRESS:-}"
 DIRECT_TARGET_PORT="${DIRECT_TARGET_PORT:-}"
 HIGH_PORT_MIN="${HIGH_PORT_MIN:-20000}"
 HIGH_PORT_MAX="${HIGH_PORT_MAX:-65535}"
-SING_BOX_VERSION_SERIES="${SING_BOX_VERSION_SERIES:-1.14}"
 
 HY2_SNI="${HY2_SNI:-${SNI:-www.bing.com}}"
 HY2_PORT="${HY2_PORT:-auto}"
@@ -405,7 +404,7 @@ Direct 固定目标中转选项：
   VLESS_DOMAIN, VLESS_PORT, SNELL5_PORT, SNELL6_PORT,
   DIRECT_PORT, DIRECT_TARGET_ADDRESS, DIRECT_TARGET_PORT,
   SNELL5_OBFS_MODE, SNELL6_MODE,
-  HIGH_PORT_MIN, HIGH_PORT_MAX, SING_BOX_VERSION_SERIES,
+  HIGH_PORT_MIN, HIGH_PORT_MAX,
   HY2_SNI, SNI, HY2_PORT, HY2_PORT_HOPPING, HOP_PORTS, HOP_INTERVAL,
   UP_MBPS, DOWN_MBPS, OBFS, OBFS_PASSWORD,
   GECKO_MIN_PACKET_SIZE, GECKO_MAX_PACKET_SIZE,
@@ -1260,10 +1259,10 @@ build_anytls_share_url() {
 
 build_snell_share_urls() {
   if (( INSTALL_SNELL5 )); then
-    SNELL5_SHARE_URL="snell://$(url_encode "$SNELL5_PSK")@${SERVER_IP}:${SNELL5_PORT}?version=5&obfs=${SNELL5_OBFS_MODE}#Snell-v5"
+    SNELL5_SHARE_URL="snell://$(url_encode "$SNELL5_PSK")@${SERVER_IP}:${SNELL5_PORT}?version=5&obfs=${SNELL5_OBFS_MODE}&tfo=true&reuse=true#Snell-v5"
   fi
   if (( INSTALL_SNELL6 )); then
-    SNELL6_SHARE_URL="snell://$(url_encode "$SNELL6_PSK")@${SERVER_IP}:${SNELL6_PORT}?version=6&mode=${SNELL6_MODE}#Snell-v6"
+    SNELL6_SHARE_URL="snell://$(url_encode "$SNELL6_PSK")@${SERVER_IP}:${SNELL6_PORT}?version=6&mode=${SNELL6_MODE}&tfo=true&reuse=true#Snell-v6"
   fi
 }
 
@@ -2239,7 +2238,7 @@ prepare_inputs() {
 fetch_preferred_sing_box_version() {
   local url payload version
   local -a sources=(
-    "https://api.github.com/repos/SagerNet/sing-box/releases?per_page=30"
+    "https://api.github.com/repos/SagerNet/sing-box/releases?per_page=100"
     "https://api.github.com/repos/SagerNet/sing-box/tags?per_page=100"
     "https://data.jsdelivr.com/v1/package/gh/SagerNet/sing-box"
   )
@@ -2247,14 +2246,16 @@ fetch_preferred_sing_box_version() {
   for url in "${sources[@]}"; do
     if payload="$(curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors \
       --connect-timeout 10 --max-time 60 "$url")"; then
+      # Only consider version tags; release descriptions may mention old versions.
       version="$(printf '%s' "$payload" | jq -r '
-        .. | strings
-      ' | sed 's/^v//' | awk -v series="$SING_BOX_VERSION_SERIES" '
-        $0 ~ ("^" series "\\.[0-9]+$") { print "4|" $0; next }
-        $0 ~ ("^" series "\\.[0-9]+-rc\\.[0-9]+$") { print "3|" $0; next }
-        $0 ~ ("^" series "\\.[0-9]+-beta\\.[0-9]+$") { print "2|" $0; next }
-        $0 ~ ("^" series "\\.[0-9]+-alpha\\.[0-9]+$") { print "1|" $0 }
-      ' | sort -t '|' -k1,1n -k2,2V | tail -n 1 | cut -d '|' -f 2-)"
+        if type == "array" then
+          .[] | select(.draft != true) | (.tag_name // .name // empty)
+        else
+          .versions[]?
+        end
+      ' | sed 's/^v//' | awk '
+        /^[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+$/ { print }
+      ' | sort -V | tail -n 1)"
       if [[ -n "$version" ]]; then
         printf '%s' "$version"
         return 0
@@ -2387,7 +2388,7 @@ install_dependencies() {
       curl openssl ca-certificates iproute2 coreutils jq nftables iptables procps
   fi
   if ! release_version="$(fetch_preferred_sing_box_version)"; then
-    echo "错误：获取 sing-box ${SING_BOX_VERSION_SERIES}.x 推荐版本失败"
+    echo "错误：获取 sing-box 最新 Alpha 版本失败"
     exit 1
   fi
   echo "正在安装 sing-box v${release_version}……"
@@ -2607,6 +2608,7 @@ snell5_inbound_json() {
       "tag": "snell5-in",
       "listen": "::",
       "listen_port": ${SNELL5_PORT},
+      "tcp_fast_open": true,
       "version": 5,
       "psk": "${SNELL5_PSK}"$(json_snell5_obfs_field)
     }
@@ -2620,6 +2622,7 @@ snell6_inbound_json() {
       "tag": "snell6-in",
       "listen": "::",
       "listen_port": ${SNELL6_PORT},
+      "tcp_fast_open": true,
       "version": 6,
       "psk": "${SNELL6_PSK}"$(json_snell6_mode_field)
     }
@@ -2930,6 +2933,8 @@ write_snell_clients() {
       "type": "snell",
       "server": "${SERVER_IP}",
       "server_port": ${SNELL5_PORT},
+      "tcp_fast_open": true,
+      "reuse": true,
       "version": 4,
       "psk": "${SNELL5_PSK}"$(json_snell5_obfs_field)
     }
@@ -2947,6 +2952,8 @@ JSON
       "type": "snell",
       "server": "${SERVER_IP}",
       "server_port": ${SNELL6_PORT},
+      "tcp_fast_open": true,
+      "reuse": true,
       "version": 6,
       "psk": "${SNELL6_PSK}"$(json_snell6_mode_field)
     }
@@ -2957,13 +2964,13 @@ JSON
   fi
 
   if (( INSTALL_SNELL5 )); then
-    SNELL5_SURGE_LINE="SnellV5=snell,${SERVER_IP},${SNELL5_PORT},psk=\"${SNELL5_PSK}\",version=5,tfo=false"
+    SNELL5_SURGE_LINE="SnellV5=snell,${SERVER_IP},${SNELL5_PORT},psk=\"${SNELL5_PSK}\",version=5,tfo=true,reuse=true"
   elif [[ -f "$SNELL5_INFO" ]]; then
     SNELL5_SURGE_LINE="$(sed -n '/^SnellV5=snell,/p' "$SNELL5_INFO" | head -n 1)"
   fi
 
   if (( INSTALL_SNELL6 )); then
-    SNELL6_SURGE_LINE="SnellV6=snell,${SERVER_IP},${SNELL6_PORT},psk=\"${SNELL6_PSK}\",version=6,mode=${SNELL6_MODE},tfo=false"
+    SNELL6_SURGE_LINE="SnellV6=snell,${SERVER_IP},${SNELL6_PORT},psk=\"${SNELL6_PSK}\",version=6,mode=${SNELL6_MODE},tfo=true,reuse=true"
   elif [[ -f "$SNELL6_INFO" ]]; then
     SNELL6_SURGE_LINE="$(sed -n '/^SnellV6=snell,/p' "$SNELL6_INFO" | head -n 1)"
   fi
