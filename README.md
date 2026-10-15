@@ -16,7 +16,7 @@
 
 本项目支持 Debian、Ubuntu 和 Alpine Linux VPS，默认自动选择一个当前未被占用的随机高端口，完成服务端部署，并生成可直接合并到客户端配置中的 `outbounds` 片段。
 
-脚本会从 sing-box 官方 Releases 自动选择 1.14 系列的推荐版本，优先级为正式版、RC、Beta、Alpha，以支持 Hysteria2 Gecko 等新功能并及时获得后续修复。可通过 `SING_BOX_VERSION_SERIES` 切换目标版本系列。
+脚本每次安装都会自动选择 sing-box 最新 Alpha 版本，不再固定版本系列，也不会回退到正式版、RC 或 Beta。
 
 ---
 
@@ -160,7 +160,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 
 ## Snell v5 / v6
 
-脚本使用 sing-box 1.14 系列当前成熟度最高的版本提供 Snell 服务端，两个版本均默认选择未占用的随机 TCP 高端口，并生成 Surge 配置片段：
+脚本使用 sing-box 最新 Alpha 版本提供 Snell 服务端，两个版本均默认选择未占用的随机 TCP 高端口，并生成 Surge 配置片段：
 
 ```bash
 # Snell v5
@@ -171,6 +171,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 ```
 
 可用参数：`--snell5-port`、`--snell6-port`、`--snell5-obfs none|http`、`--snell6-mode default|unshaped|unsafe-raw`。v6 默认使用安全的 `default` 流量整形模式；不要在公网使用明文的 `unsafe-raw`。
+
+生成的 Snell v5/v6 节点默认开启 TCP Fast Open 和连接复用：Surge 使用 `tfo=true,reuse=true`，sing-box 客户端使用 `tcp_fast_open: true`、`reuse: true`，服务端同时开启 TCP Fast Open。约定格式 URL 也携带 `tfo=true&reuse=true`；导入支持情况取决于客户端。
 
 所有客户端文件统一保存在 `/root/sing-box/`。sing-box 的 Snell v5 不包含官方 v5 QUIC Proxy，Surge 中的普通 TCP Snell 可以正常使用。
 
