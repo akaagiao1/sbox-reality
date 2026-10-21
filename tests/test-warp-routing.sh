@@ -844,11 +844,68 @@ test_integration() {
     bash -c '
       rg -q -- "--warp-rules" "$1"
       rg -q "MetaCubeX/meta-rules-dat" "$1"
-      rg -q "/etc/sing-box/sbox-warp-credentials.json" "$1"
+      rg -q "/etc/sing-box/sbox-warp-credentials.credentials" "$1"
     ' _ "$ROOT_DIR/README.md"
 }
 
+test_directory_loading() {
+  local config_dir="$TEST_TMP/service-config"
+  local credential_name
+  mkdir -p "$config_dir"
+  printf '{"outbounds":[{"type":"direct"}]}\n' > "$config_dir/config.json"
+  credential_name="$(env -u WARP_CREDENTIALS_FILE bash -c '
+    script=$1; set --; source "$script"; basename "$WARP_CREDENTIALS_FILE"
+  ' _ "$INSTALL_SCRIPT")"
+  write_test_credentials "$config_dir/$credential_name"
+  if [[ -x /workspace/.sbox-dev/bin/sing-box ]]; then
+    assert_succeeds "service directory loading must ignore WARP credentials" \
+      /workspace/.sbox-dev/bin/sing-box check -C "$config_dir"
+  fi
+  rm -f "$config_dir/$credential_name"
+  write_test_credentials "$config_dir/sbox-warp-credentials.json"
+  assert_succeeds "legacy credentials should migrate without changing their contents" \
+    env WARP_CREDENTIALS_FILE="$config_dir/sbox-warp-credentials.credentials" bash -c '
+      script=$1; set --; source "$script"
+      legacy="$(dirname "$WARP_CREDENTIALS_FILE")/sbox-warp-credentials.json"
+      digest="$(sha256sum "$legacy" | cut -d " " -f 1)"
+      warp_migrate_legacy_credentials
+      [[ ! -e "$legacy" ]]
+      [[ "$(sha256sum "$WARP_CREDENTIALS_FILE" | cut -d " " -f 1)" == "$digest" ]]
+      [[ "$(stat -c %a "$WARP_CREDENTIALS_FILE")" == 600 ]]
+      warp_migrate_legacy_credentials
+    ' _ "$INSTALL_SCRIPT"
+  if [[ -x /workspace/.sbox-dev/bin/sing-box ]]; then
+    assert_succeeds "directory loading should work after migrating legacy credentials" \
+      /workspace/.sbox-dev/bin/sing-box check -C "$config_dir"
+  fi
+  assert_succeeds "different legacy credentials must never overwrite current credentials" \
+    env WARP_CREDENTIALS_FILE="$config_dir/sbox-warp-credentials.credentials" bash -c '
+      script=$1; set --; source "$script"
+      legacy="$(dirname "$WARP_CREDENTIALS_FILE")/sbox-warp-credentials.json"
+      printf "different\n" > "$legacy"
+      digest="$(sha256sum "$WARP_CREDENTIALS_FILE" | cut -d " " -f 1)"
+      if warp_migrate_legacy_credentials; then exit 1; fi
+      [[ -f "$legacy" ]]
+      [[ "$(sha256sum "$WARP_CREDENTIALS_FILE" | cut -d " " -f 1)" == "$digest" ]]
+      rm "$legacy"
+    ' _ "$INSTALL_SCRIPT"
+  assert_succeeds "old backup credentials should restore directly to the safe filename" \
+    env WARP_CREDENTIALS_FILE="$config_dir/sbox-warp-credentials.credentials" bash -c '
+      script=$1; set --; source "$script"
+      backup="$(mktemp -d)"
+      cp "$WARP_CREDENTIALS_FILE" "$backup/sbox-warp-credentials.json"
+      rm "$WARP_CREDENTIALS_FILE"
+      restore_file_from_backup "$backup" "$WARP_CREDENTIALS_FILE"
+      cmp -s "$WARP_CREDENTIALS_FILE" "$backup/sbox-warp-credentials.json"
+      [[ ! -e "$(dirname "$WARP_CREDENTIALS_FILE")/sbox-warp-credentials.json" ]]
+      rm -r "$backup"
+    ' _ "$INSTALL_SCRIPT"
+}
+
 case "$TEST_GROUP" in
+  directory)
+    test_directory_loading
+    ;;
   normalization)
     test_normalization
     ;;
@@ -865,6 +922,7 @@ case "$TEST_GROUP" in
     test_integration
     ;;
   all)
+    test_directory_loading
     test_normalization
     test_credentials
     test_config

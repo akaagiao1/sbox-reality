@@ -54,7 +54,7 @@ GECKO_MAX_PACKET_SIZE="${GECKO_MAX_PACKET_SIZE:-1200}"
 PROXY_NAME="${PROXY_NAME:-HY2}"
 
 SERVER_CONF="${SERVER_CONF:-/etc/sing-box/config.json}"
-WARP_CREDENTIALS_FILE="${WARP_CREDENTIALS_FILE:-/etc/sing-box/sbox-warp-credentials.json}"
+WARP_CREDENTIALS_FILE="${WARP_CREDENTIALS_FILE:-/etc/sing-box/sbox-warp-credentials.credentials}"
 OUTPUT_DIR="/root/sing-box"
 ANYTLS_CLIENT_OUT="$OUTPUT_DIR/anytls-sing-box.json"
 ANYTLS_URL_FILE="$OUTPUT_DIR/anytls-url.txt"
@@ -968,6 +968,24 @@ warp_merge_config() {
   mv -f "$temporary" "$output_file"
 }
 
+warp_migrate_legacy_credentials() {
+  local legacy_file="$(dirname "$WARP_CREDENTIALS_FILE")/sbox-warp-credentials.json"
+
+  [[ "$legacy_file" != "$WARP_CREDENTIALS_FILE" && -e "$legacy_file" ]] || return 0
+  if [[ -e "$WARP_CREDENTIALS_FILE" ]]; then
+    if ! cmp -s "$legacy_file" "$WARP_CREDENTIALS_FILE"; then
+      echo "错误：新旧 WARP 凭据不同，请先手动确认后移走旧 JSON 凭据文件" >&2
+      return 1
+    fi
+    chmod 600 "$WARP_CREDENTIALS_FILE" || return 1
+    rm -f "$legacy_file" || return 1
+  else
+    chmod 600 "$legacy_file" || return 1
+    mv "$legacy_file" "$WARP_CREDENTIALS_FILE" || return 1
+  fi
+  echo "已迁移 WARP 凭据，避免被 sing-box 当作配置加载。"
+}
+
 warp_prepare_credentials() {
   local staged_file="$1"
 
@@ -1195,6 +1213,7 @@ warp_disable_existing() {
 }
 
 warp_run_standalone() {
+  warp_migrate_legacy_credentials || return 1
   if (( WARP_OFF )); then
     warp_disable_existing
   else
@@ -1223,6 +1242,7 @@ warp_prepare_install_state() {
   local rules_json
 
   (( WARP_RULES_EXPLICIT || WARP_RESET )) || return 0
+  warp_migrate_legacy_credentials || return 1
 
   if (( WARP_RULES_EXPLICIT )); then
     rules_json="$WARP_RULES_JSON"
@@ -2549,6 +2569,12 @@ restore_file_from_backup() {
   local source
 
   source="${backup_dir}/$(basename "$destination")"
+
+  # Old backups stored credentials with a JSON suffix, which -C would load.
+  if [[ "$destination" == "$WARP_CREDENTIALS_FILE" && ! -f "$source" \
+    && -f "$backup_dir/sbox-warp-credentials.json" ]]; then
+    source="$backup_dir/sbox-warp-credentials.json"
+  fi
 
   [[ -f "$source" ]] || return 0
   mkdir -p "$(dirname "$destination")"
@@ -4445,6 +4471,7 @@ main() {
 
   detect_platform
   prepare_output_dir
+  warp_migrate_legacy_credentials || return 1
   resolve_sing_box_binary || true
 
   if [[ "$ACTION" == "warp" ]]; then
