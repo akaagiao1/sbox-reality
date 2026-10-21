@@ -100,6 +100,8 @@ test_normalization() {
     source_with_args --mode anytls --config keep --warp-rules youtube
   assert_fails "action aliases in --mode should not ignore WARP rules" \
     source_with_args --mode uninstall --warp-rules youtube
+  assert_fails "tab-wrapped action aliases should not bypass WARP conflicts" \
+    source_with_args --mode $'\t7\t' --warp-rules youtube
 }
 
 write_registration_response() {
@@ -400,6 +402,16 @@ JSON
   assert_fails "unexpected managed rule-set collision should fail" \
     merge_warp_config "$TEST_TMP/conflict-ruleset.json" "$credentials" '["youtube"]' "$TEST_TMP/conflict-ruleset-result.json"
 
+  jq '.route.rule_set = [{"type":"local","tag":"sbox-warp-geosite-Custom","path":"/tmp/user.srs"}]' "$base" \
+    > "$TEST_TMP/conflict-uppercase-ruleset.json"
+  assert_fails "every prefix-shaped rule-set collision should fail before removal" \
+    merge_warp_config "$TEST_TMP/conflict-uppercase-ruleset.json" "$credentials" '["youtube"]' "$TEST_TMP/conflict-uppercase-ruleset-result.json"
+
+  jq '.endpoints |= map(if .tag == "sbox-warp-out" then . + {listen_port: 51820} else . end)' "$merged" \
+    > "$TEST_TMP/conflict-customized-endpoint.json"
+  assert_fails "managed endpoint with extra settings should not be overwritten" \
+    merge_warp_config "$TEST_TMP/conflict-customized-endpoint.json" "$credentials" '["youtube"]' "$TEST_TMP/conflict-customized-endpoint-result.json"
+
   assert_fails "all rule URLs should be probed and one missing rule should fail" \
     bash -c '
       script=$1; capture=$2; set --; source "$script"
@@ -617,6 +629,97 @@ JSON
       warp_run_standalone
       [[ "$(cat "$sentinel")" == disable ]]
     ' _ "$INSTALL_SCRIPT" "$TEST_TMP/main-disable-sentinel"
+
+  local snapshot_config="$TEST_TMP/snapshot-copy-config.json"
+  local snapshot_credentials="$TEST_TMP/snapshot-copy-credentials.json"
+  local staged_config="$TEST_TMP/snapshot-copy-staged-config.json"
+  local staged_credentials="$TEST_TMP/snapshot-copy-staged-credentials.json"
+  printf 'original-config\n' > "$snapshot_config"
+  printf 'original-credentials\n' > "$snapshot_credentials"
+  printf 'new-config\n' > "$staged_config"
+  printf 'new-credentials\n' > "$staged_credentials"
+  assert_fails "failed snapshot copy should abort before replacing formal files" \
+    env SERVER_CONF="$snapshot_config" WARP_CREDENTIALS_FILE="$snapshot_credentials" \
+      bash -c '
+        script=$1; staged_config=$2; staged_credentials=$3
+        set --; source "$script"
+        backup_existing_files() { return 0; }
+        service_restart() { return 0; }
+        cp() {
+          local destination="${@: -1}"
+          if [[ "$destination" == */.sbox-warp-snapshot.*/config.json ]]; then
+            : > "$destination"
+            return 1
+          fi
+          command cp "$@"
+        }
+        if warp_commit_staged_files "$staged_config" "$staged_credentials"; then
+          exit 0
+        fi
+        exit 1
+      ' _ "$INSTALL_SCRIPT" "$staged_config" "$staged_credentials"
+  assert_eq 'original-config' "$(cat "$snapshot_config")" \
+    "snapshot failure should preserve formal config"
+  assert_eq 'original-credentials' "$(cat "$snapshot_credentials")" \
+    "snapshot failure should preserve formal credentials"
+
+  local restore_root="$TEST_TMP/restore-copy"
+  mkdir -p "$restore_root"
+  printf 'original-config\n' > "$restore_root/config.json"
+  printf 'original-credentials\n' > "$restore_root/credentials.json"
+  printf 'new-config\n' > "$restore_root/staged-config.json"
+  printf 'new-credentials\n' > "$restore_root/staged-credentials.json"
+  assert_fails "failed rollback copy should retain intact recovery snapshots" \
+    env SERVER_CONF="$restore_root/config.json" WARP_CREDENTIALS_FILE="$restore_root/credentials.json" \
+      bash -c '
+        script=$1; staged_config=$2; staged_credentials=$3; recovery_path=$4
+        set --; source "$script"
+        backup_existing_files() { return 0; }
+        service_restart() { return 1; }
+        cp() {
+          local destination="${@: -1}"
+          if [[ "$destination" == */.sbox-warp-restore.* ]]; then
+            : > "$destination"
+            return 1
+          fi
+          command cp "$@"
+        }
+        status=0
+        warp_commit_staged_files "$staged_config" "$staged_credentials" || status=$?
+        snapshot_dir="$(find "$(dirname "$SERVER_CONF")" -maxdepth 1 -type d -name ".sbox-warp-snapshot.*" -print -quit)"
+        [[ -n "$snapshot_dir" ]]
+        [[ "$(cat "$snapshot_dir/config.json")" == original-config ]]
+        [[ "$(cat "$snapshot_dir/credentials.json")" == original-credentials ]]
+        [[ -s "$SERVER_CONF" && -s "$WARP_CREDENTIALS_FILE" ]]
+        printf "%s\n" "$snapshot_dir" > "$recovery_path"
+        exit "$status"
+      ' _ "$INSTALL_SCRIPT" "$restore_root/staged-config.json" \
+        "$restore_root/staged-credentials.json" "$restore_root/recovery-path"
+  assert_succeeds "rollback failure should leave a recovery snapshot path" \
+    test -s "$restore_root/recovery-path"
+
+  local backup_failure_root="$TEST_TMP/backup-failure"
+  mkdir -p "$backup_failure_root"
+  printf 'must-survive\n' > "$backup_failure_root/config.json"
+  assert_fails "failed backup copy should be reported before a transaction continues" \
+    env SERVER_CONF="$backup_failure_root/config.json" \
+      WARP_CREDENTIALS_FILE="$backup_failure_root/missing-credentials.json" \
+      BACKUP_ROOT="$backup_failure_root/backups" \
+      bash -c '
+        script=$1
+        set --; source "$script"
+        cp() {
+          local source="${@: -2:1}"
+          [[ "$source" != "$SERVER_CONF" ]] || return 1
+          command cp "$@"
+        }
+        if backup_existing_files injected-failure; then
+          exit 0
+        fi
+        exit 1
+      ' _ "$INSTALL_SCRIPT"
+  assert_eq 'must-survive' "$(cat "$backup_failure_root/config.json")" \
+    "backup failure should not alter the source file"
 }
 
 test_integration() {
@@ -667,6 +770,41 @@ test_integration() {
     ' "$config"
   assert_succeeds "combined install should place staged credentials" \
     bash -c 'test -s "$1" && test "$(stat -c %a "$1")" = 600' _ "$credentials"
+
+  local rollback_root="$TEST_TMP/combined-rollback"
+  mkdir -p "$rollback_root"
+  printf 'old-config\n' > "$rollback_root/config.json"
+  printf 'old-credentials\n' > "$rollback_root/credentials.json"
+  assert_fails "nested service restart failure should roll back combined installation" \
+    env SERVER_CONF="$rollback_root/config.json" \
+      WARP_CREDENTIALS_FILE="$rollback_root/credentials.json" \
+      bash -c '
+        script=$1; restart_count=$2
+        set --; source "$script"
+        WARP_INSTALL_ACTIVE=1
+        WARP_INSTALL_STAGE_DIR="$(mktemp -d "$(dirname "$SERVER_CONF")/.stage.XXXXXX")"
+        warp_begin_install_transaction
+        printf "new-config\n" > "$SERVER_CONF"
+        printf "new-credentials\n" > "$WARP_CREDENTIALS_FILE"
+        CONFIG_POLICY=merge
+        detect_server_ip() { return 0; }
+        service_reload() { return 0; }
+        service_enable() { return 0; }
+        service_restart() {
+          local count=0
+          [[ -f "$restart_count" ]] && count="$(cat "$restart_count")"
+          count=$(( count + 1 ))
+          printf "%s\n" "$count" > "$restart_count"
+          (( count > 1 ))
+        }
+        complete_install_after_config
+      ' _ "$INSTALL_SCRIPT" "$rollback_root/restart-count"
+  assert_eq '2' "$(cat "$rollback_root/restart-count")" \
+    "combined rollback should restart the restored service"
+  assert_eq 'old-config' "$(cat "$rollback_root/config.json")" \
+    "combined rollback should restore config"
+  assert_eq 'old-credentials' "$(cat "$rollback_root/credentials.json")" \
+    "combined rollback should restore credentials"
 
   assert_succeeds "combined install should back up before staging new credentials" \
     env SERVER_CONF="$config" WARP_CREDENTIALS_FILE="$credentials" bash -c '

@@ -488,6 +488,19 @@ warp_normalize_rules() {
   printf '[%s]\n' "$json"
 }
 
+normalize_mode_input() {
+  local raw="$1"
+
+  raw="${raw//，/,}"
+  raw="${raw//、/,}"
+  raw="${raw//;/,}"
+  raw="${raw// /,}"
+  raw="${raw//$'\t'/,}"
+  raw="${raw//$'\n'/,}"
+  raw="${raw//$'\r'/,}"
+  printf '%s\n' "$raw"
+}
+
 warp_validate_cli() {
   local has_warp_action=0 raw_mode mode_token
   local -a mode_items
@@ -502,10 +515,7 @@ warp_validate_cli() {
     return 1
   fi
   if (( has_warp_action )) && [[ -n "$INSTALL_MODE" ]]; then
-    raw_mode="${INSTALL_MODE//，/,}"
-    raw_mode="${raw_mode//、/,}"
-    raw_mode="${raw_mode//;/,}"
-    raw_mode="${raw_mode// /,}"
+    raw_mode="$(normalize_mode_input "$INSTALL_MODE")"
     IFS=',' read -r -a mode_items <<< "$raw_mode"
     for mode_token in "${mode_items[@]}"; do
       mode_token="$(printf '%s' "$mode_token" | tr '[:upper:]' '[:lower:]')"
@@ -809,6 +819,8 @@ warp_validate_managed_ownership() {
       and .tag == "sbox-warp-out"
       and .mtu == 1280
       and (.address | type == "array" and length == 2)
+      and (.address[0] | type == "string" and endswith("/32"))
+      and (.address[1] | type == "string" and endswith("/128"))
       and (.private_key | type == "string" and length == 44)
       and (.peers | type == "array" and length == 1)
       and .peers[0].address == "engage.cloudflareclient.com"
@@ -816,7 +828,10 @@ warp_validate_managed_ownership() {
       and .peers[0].public_key == "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
       and .peers[0].allowed_ips == ["0.0.0.0/0", "::/0"]
       and .peers[0].persistent_keepalive_interval == 30
-      and (.peers[0].reserved | type == "array" and length == 3);
+      and (.peers[0].reserved | type == "array" and length == 3
+        and all(.[]; type == "number" and floor == . and . >= 0 and . <= 255))
+      and ((.peers[0] | keys | sort) == ["address", "allowed_ips", "persistent_keepalive_interval", "port", "public_key", "reserved"])
+      and ((keys | sort) == ["address", "mtu", "peers", "private_key", "tag", "type"]);
     def valid_managed_rule_set:
       (.tag | sub("^sbox-warp-geosite-"; "")) as $name
       | .type == "remote"
@@ -830,7 +845,8 @@ warp_validate_managed_ownership() {
       . == {type: "direct", tag: "sbox-warp-direct"})
     and ([.endpoints[]? | select(.tag == "sbox-warp-out")] | length) <= 1
     and all(.endpoints[]? | select(.tag == "sbox-warp-out"); valid_managed_endpoint)
-    and all(.route.rule_set[]? | select(.tag | managed_rule_set_tag); valid_managed_rule_set)
+    and all(.route.rule_set[]? | select((.tag // "") | startswith("sbox-warp-geosite-"));
+      (.tag | managed_rule_set_tag) and valid_managed_rule_set)
     and ([.route.rules[]? | select(.outbound == "sbox-warp-out")] | length) <= 1
     and all(.route.rules[]? | select(.outbound == "sbox-warp-out"); valid_managed_route)
   ' "$config_file" >/dev/null 2>&1
@@ -960,7 +976,10 @@ warp_prepare_credentials() {
       echo "错误：现有 WARP 凭据无效；请使用 --warp-reset 重新注册" >&2
       return 1
     fi
-    cp "$WARP_CREDENTIALS_FILE" "$staged_file"
+    if ! cp "$WARP_CREDENTIALS_FILE" "$staged_file"; then
+      echo "错误：无法暂存现有 WARP 凭据" >&2
+      return 1
+    fi
   else
     echo "正在向 Cloudflare 注册 WARP 凭据……"
     if ! warp_register_credentials "$staged_file"; then
@@ -975,7 +994,11 @@ warp_prepare_credentials() {
     rm -f "$staged_file"
     return 1
   fi
-  chmod 600 "$staged_file"
+  if ! chmod 600 "$staged_file"; then
+    echo "错误：无法设置暂存 WARP 凭据权限" >&2
+    rm -f "$staged_file"
+    return 1
+  fi
 }
 
 warp_restore_file() {
@@ -985,13 +1008,48 @@ warp_restore_file() {
   local temporary
 
   if (( existed )); then
-    temporary="$(mktemp "$(dirname "$destination")/.sbox-warp-restore.XXXXXX")"
-    cp -p "$snapshot_file" "$temporary"
-    chmod 600 "$temporary"
-    mv -f "$temporary" "$destination"
+    if [[ ! -f "$snapshot_file" ]]; then
+      echo "错误：缺少 WARP 恢复快照：$snapshot_file" >&2
+      return 1
+    fi
+    if ! temporary="$(mktemp "$(dirname "$destination")/.sbox-warp-restore.XXXXXX")"; then
+      echo "错误：无法创建 WARP 恢复临时文件" >&2
+      return 1
+    fi
+    if ! cp -p "$snapshot_file" "$temporary"; then
+      rm -f "$temporary"
+      echo "错误：无法复制 WARP 恢复快照" >&2
+      return 1
+    fi
+    if ! chmod 600 "$temporary"; then
+      rm -f "$temporary"
+      echo "错误：无法设置 WARP 恢复文件权限" >&2
+      return 1
+    fi
+    if ! mv -f "$temporary" "$destination"; then
+      rm -f "$temporary"
+      echo "错误：无法恢复 WARP 文件：$destination" >&2
+      return 1
+    fi
   else
-    rm -f "$destination"
+    if ! rm -f "$destination"; then
+      echo "错误：无法移除回滚前不存在的 WARP 文件：$destination" >&2
+      return 1
+    fi
   fi
+}
+
+warp_restore_snapshot_pair() {
+  local snapshot_dir="$1"
+  local config_existed="$2"
+  local credentials_existed="$3"
+  local failed=0
+
+  warp_restore_file "$snapshot_dir/config.json" \
+    "$SERVER_CONF" "$config_existed" || failed=1
+  warp_restore_file "$snapshot_dir/credentials.json" \
+    "$WARP_CREDENTIALS_FILE" "$credentials_existed" || failed=1
+  (( failed == 0 ))
 }
 
 warp_commit_staged_files() {
@@ -999,14 +1057,25 @@ warp_commit_staged_files() {
   local staged_credentials="${2:-}"
   local snapshot_dir config_existed=0 credentials_existed=0
 
-  snapshot_dir="$(mktemp -d "$(dirname "$SERVER_CONF")/.sbox-warp-snapshot.XXXXXX")"
+  if ! snapshot_dir="$(mktemp -d "$(dirname "$SERVER_CONF")/.sbox-warp-snapshot.XXXXXX")"; then
+    echo "错误：无法创建 WARP 快照目录" >&2
+    return 1
+  fi
   if [[ -e "$SERVER_CONF" ]]; then
     config_existed=1
-    cp -p "$SERVER_CONF" "$snapshot_dir/config.json"
+    if ! cp -p "$SERVER_CONF" "$snapshot_dir/config.json"; then
+      echo "错误：无法快照现有 sing-box 配置" >&2
+      rm -rf "$snapshot_dir"
+      return 1
+    fi
   fi
   if [[ -e "$WARP_CREDENTIALS_FILE" ]]; then
     credentials_existed=1
-    cp -p "$WARP_CREDENTIALS_FILE" "$snapshot_dir/credentials.json"
+    if ! cp -p "$WARP_CREDENTIALS_FILE" "$snapshot_dir/credentials.json"; then
+      echo "错误：无法快照现有 WARP 凭据" >&2
+      rm -rf "$snapshot_dir"
+      return 1
+    fi
   fi
 
   if ! backup_existing_files "before-warp-update"; then
@@ -1014,27 +1083,37 @@ warp_commit_staged_files() {
     return 1
   fi
 
-  chmod 600 "$staged_config"
+  if ! chmod 600 "$staged_config"; then
+    rm -rf "$snapshot_dir"
+    return 1
+  fi
+  if [[ -n "$staged_credentials" ]] && ! chmod 600 "$staged_credentials"; then
+    rm -rf "$snapshot_dir"
+    return 1
+  fi
   if ! mv -f "$staged_config" "$SERVER_CONF"; then
     rm -rf "$snapshot_dir"
     return 1
   fi
   if [[ -n "$staged_credentials" ]]; then
-    chmod 600 "$staged_credentials"
     if ! mv -f "$staged_credentials" "$WARP_CREDENTIALS_FILE"; then
-      warp_restore_file "$snapshot_dir/config.json" "$SERVER_CONF" "$config_existed"
-      warp_restore_file "$snapshot_dir/credentials.json" "$WARP_CREDENTIALS_FILE" "$credentials_existed"
-      rm -rf "$snapshot_dir"
+      if warp_restore_snapshot_pair "$snapshot_dir" "$config_existed" "$credentials_existed"; then
+        rm -rf "$snapshot_dir"
+      else
+        echo "错误：WARP 回滚不完整，恢复快照保留在 $snapshot_dir" >&2
+      fi
       return 1
     fi
   fi
 
   if ! service_restart; then
     echo "错误：sing-box 重启失败，正在恢复 WARP 修改前的文件" >&2
-    warp_restore_file "$snapshot_dir/config.json" "$SERVER_CONF" "$config_existed"
-    warp_restore_file "$snapshot_dir/credentials.json" "$WARP_CREDENTIALS_FILE" "$credentials_existed"
-    service_restart || true
-    rm -rf "$snapshot_dir"
+    if warp_restore_snapshot_pair "$snapshot_dir" "$config_existed" "$credentials_existed"; then
+      service_restart || true
+      rm -rf "$snapshot_dir"
+    else
+      echo "错误：WARP 回滚不完整，恢复快照保留在 $snapshot_dir" >&2
+    fi
     return 1
   fi
 
@@ -1060,7 +1139,10 @@ warp_apply_existing() {
   fi
 
   warp_validate_rule_urls "$rules_json" || return 1
-  stage_dir="$(mktemp -d "$(dirname "$SERVER_CONF")/.sbox-warp-stage.XXXXXX")"
+  if ! stage_dir="$(mktemp -d "$(dirname "$SERVER_CONF")/.sbox-warp-stage.XXXXXX")"; then
+    echo "错误：无法创建 WARP 暂存目录" >&2
+    return 1
+  fi
   staged_config="$stage_dir/config.json"
   staged_credentials="$stage_dir/credentials.json"
 
@@ -1090,7 +1172,10 @@ warp_disable_existing() {
     return 1
   fi
 
-  stage_dir="$(mktemp -d "$(dirname "$SERVER_CONF")/.sbox-warp-stage.XXXXXX")"
+  if ! stage_dir="$(mktemp -d "$(dirname "$SERVER_CONF")/.sbox-warp-stage.XXXXXX")"; then
+    echo "错误：无法创建 WARP 暂存目录" >&2
+    return 1
+  fi
   staged_config="$stage_dir/config.json"
   if ! warp_remove_config "$SERVER_CONF" "$staged_config"; then
     rm -rf "$stage_dir"
@@ -1153,9 +1238,16 @@ warp_prepare_install_state() {
   warp_validate_rule_urls "$rules_json" || return 1
   backup_existing_files "before-warp-install" || return 1
 
-  mkdir -p "$(dirname "$SERVER_CONF")"
-  chmod 700 "$(dirname "$SERVER_CONF")"
-  WARP_INSTALL_STAGE_DIR="$(mktemp -d "$(dirname "$SERVER_CONF")/.sbox-warp-install.XXXXXX")"
+  if ! mkdir -p "$(dirname "$SERVER_CONF")" \
+    || ! chmod 700 "$(dirname "$SERVER_CONF")"; then
+    echo "错误：无法准备安全的 sing-box 配置目录" >&2
+    return 1
+  fi
+  if ! WARP_INSTALL_STAGE_DIR="$(mktemp -d "$(dirname "$SERVER_CONF")/.sbox-warp-install.XXXXXX")"; then
+    echo "错误：无法创建 WARP 安装暂存目录" >&2
+    WARP_INSTALL_STAGE_DIR=""
+    return 1
+  fi
   WARP_STAGED_CREDENTIALS="$WARP_INSTALL_STAGE_DIR/credentials.json"
   if ! warp_prepare_credentials "$WARP_STAGED_CREDENTIALS"; then
     rm -rf "$WARP_INSTALL_STAGE_DIR"
@@ -1168,18 +1260,34 @@ warp_prepare_install_state() {
 }
 
 warp_begin_install_transaction() {
+  local snapshot_dir
+
   (( WARP_INSTALL_ACTIVE )) || return 0
 
   WARP_INSTALL_CONFIG_EXISTED=0
   WARP_INSTALL_CREDENTIALS_EXISTED=0
-  WARP_INSTALL_SNAPSHOT_DIR="$(mktemp -d "$(dirname "$SERVER_CONF")/.sbox-warp-install-snapshot.XXXXXX")"
+  if ! snapshot_dir="$(mktemp -d "$(dirname "$SERVER_CONF")/.sbox-warp-install-snapshot.XXXXXX")"; then
+    echo "错误：无法创建安装事务快照目录" >&2
+    return 1
+  fi
+  WARP_INSTALL_SNAPSHOT_DIR="$snapshot_dir"
   if [[ -e "$SERVER_CONF" ]]; then
     WARP_INSTALL_CONFIG_EXISTED=1
-    cp -p "$SERVER_CONF" "$WARP_INSTALL_SNAPSHOT_DIR/config.json"
+    if ! cp -p "$SERVER_CONF" "$WARP_INSTALL_SNAPSHOT_DIR/config.json"; then
+      echo "错误：无法快照安装前的 sing-box 配置" >&2
+      rm -rf "$WARP_INSTALL_SNAPSHOT_DIR"
+      WARP_INSTALL_SNAPSHOT_DIR=""
+      return 1
+    fi
   fi
   if [[ -e "$WARP_CREDENTIALS_FILE" ]]; then
     WARP_INSTALL_CREDENTIALS_EXISTED=1
-    cp -p "$WARP_CREDENTIALS_FILE" "$WARP_INSTALL_SNAPSHOT_DIR/credentials.json"
+    if ! cp -p "$WARP_CREDENTIALS_FILE" "$WARP_INSTALL_SNAPSHOT_DIR/credentials.json"; then
+      echo "错误：无法快照安装前的 WARP 凭据" >&2
+      rm -rf "$WARP_INSTALL_SNAPSHOT_DIR"
+      WARP_INSTALL_SNAPSHOT_DIR=""
+      return 1
+    fi
   fi
 }
 
@@ -1187,18 +1295,25 @@ warp_rollback_install_transaction() {
   (( WARP_INSTALL_ACTIVE )) || return 0
   [[ -n "$WARP_INSTALL_SNAPSHOT_DIR" && -d "$WARP_INSTALL_SNAPSHOT_DIR" ]] || return 0
 
-  warp_restore_file "$WARP_INSTALL_SNAPSHOT_DIR/config.json" \
-    "$SERVER_CONF" "$WARP_INSTALL_CONFIG_EXISTED"
-  warp_restore_file "$WARP_INSTALL_SNAPSHOT_DIR/credentials.json" \
-    "$WARP_CREDENTIALS_FILE" "$WARP_INSTALL_CREDENTIALS_EXISTED"
-  rm -rf "$WARP_INSTALL_SNAPSHOT_DIR" "$WARP_INSTALL_STAGE_DIR"
+  if ! warp_restore_snapshot_pair "$WARP_INSTALL_SNAPSHOT_DIR" \
+    "$WARP_INSTALL_CONFIG_EXISTED" "$WARP_INSTALL_CREDENTIALS_EXISTED"; then
+    echo "错误：安装回滚不完整，恢复快照保留在 $WARP_INSTALL_SNAPSHOT_DIR" >&2
+    return 1
+  fi
+  if ! rm -rf "$WARP_INSTALL_SNAPSHOT_DIR" "$WARP_INSTALL_STAGE_DIR"; then
+    echo "错误：无法清理已完成的安装事务文件" >&2
+    return 1
+  fi
   WARP_INSTALL_SNAPSHOT_DIR=""
   WARP_INSTALL_STAGE_DIR=""
 }
 
 warp_finalize_install_transaction() {
   (( WARP_INSTALL_ACTIVE )) || return 0
-  rm -rf "$WARP_INSTALL_SNAPSHOT_DIR" "$WARP_INSTALL_STAGE_DIR"
+  if ! rm -rf "$WARP_INSTALL_SNAPSHOT_DIR" "$WARP_INSTALL_STAGE_DIR"; then
+    echo "错误：无法清理 WARP 安装事务文件" >&2
+    return 1
+  fi
   WARP_INSTALL_SNAPSHOT_DIR=""
   WARP_INSTALL_STAGE_DIR=""
   WARP_STAGED_CREDENTIALS=""
@@ -1463,12 +1578,7 @@ normalize_mode() {
     return 0
   fi
 
-  raw="${INSTALL_MODE:-}"
-  raw="${raw//，/,}"
-  raw="${raw//、/,}"
-  raw="${raw//;/,}"
-  raw="${raw// /,}"
-  raw="${raw//$'\t'/,}"
+  raw="$(normalize_mode_input "${INSTALL_MODE:-}")"
 
   IFS=',' read -r -a mode_items <<< "$raw"
   for token in "${mode_items[@]}"; do
@@ -2317,17 +2427,27 @@ backup_existing_files() {
   )
 
   backup_dir="${BACKUP_ROOT}/${reason}-$(date +%Y%m%d-%H%M%S)-$$"
-  mkdir -p "$backup_dir"
-  chmod 700 "$BACKUP_ROOT" "$backup_dir"
+  if ! mkdir -p "$backup_dir" || ! chmod 700 "$BACKUP_ROOT" "$backup_dir"; then
+    echo "错误：无法创建安全的备份目录：$backup_dir" >&2
+    return 1
+  fi
 
   for source in "${sources[@]}"; do
     if [[ -f "$source" ]]; then
-      cp -p "$source" "$backup_dir/$(basename "$source")"
+      if ! cp -p "$source" "$backup_dir/$(basename "$source")"; then
+        echo "错误：备份文件失败：$source" >&2
+        rm -rf "$backup_dir"
+        return 1
+      fi
       copied=$(( copied + 1 ))
     elif [[ -d "$source" ]]; then
       local directory_name="external-${source#/}"
       directory_name="${directory_name//\//__}"
-      cp -a "$source" "$backup_dir/$directory_name"
+      if ! cp -a "$source" "$backup_dir/$directory_name"; then
+        echo "错误：备份目录失败：$source" >&2
+        rm -rf "$backup_dir"
+        return 1
+      fi
       copied=$(( copied + 1 ))
     fi
   done
@@ -3707,16 +3827,22 @@ write_server_config() {
       rm -f "$temp_config" "$warp_config"
       return 1
     fi
-    chmod 600 "$final_config" "$WARP_STAGED_CREDENTIALS"
+    if ! chmod 600 "$final_config" "$WARP_STAGED_CREDENTIALS"; then
+      warp_rollback_install_transaction || true
+      rm -f "$temp_config" "$warp_config"
+      return 1
+    fi
     if ! mv -f "$final_config" "$SERVER_CONF" \
       || ! mv -f "$WARP_STAGED_CREDENTIALS" "$WARP_CREDENTIALS_FILE"; then
-      warp_rollback_install_transaction
+      warp_rollback_install_transaction || true
       rm -f "$temp_config" "$warp_config"
       return 1
     fi
   else
-    chmod 600 "$final_config"
-    mv -f "$final_config" "$SERVER_CONF"
+    if ! chmod 600 "$final_config" || ! mv -f "$final_config" "$SERVER_CONF"; then
+      rm -f "$temp_config" "$warp_config"
+      return 1
+    fi
   fi
   rm -f "$temp_config" "$warp_config"
 }
@@ -3726,6 +3852,59 @@ detect_server_ip() {
   if [[ -z "$SERVER_IP" ]]; then
     SERVER_IP="your_vps_ip_or_domain"
   fi
+}
+
+run_install_after_config_steps() {
+  if (( INSTALL_HY2 )); then
+    if [[ "$HY2_PORT_HOPPING" == "on" ]]; then
+      write_port_hopping_helper || return 1
+    else
+      disable_hy2_port_hopping || return 1
+    fi
+  elif [[ "$CONFIG_POLICY" == "new" ]]; then
+    disable_hy2_port_hopping || return 1
+  fi
+
+  detect_server_ip || return 1
+
+  if (( INSTALL_ANYTLS )); then
+    write_anytls_client || return 1
+  fi
+  if (( INSTALL_VLESS )); then
+    write_vless_client || return 1
+  fi
+  if (( INSTALL_HY2 )); then
+    write_hy2_clients || return 1
+  fi
+  if (( INSTALL_SNELL5 || INSTALL_SNELL6 )); then
+    write_snell_clients || return 1
+  fi
+
+  service_reload || return 1
+  service_enable || return 1
+  service_restart || return 1
+}
+
+complete_install_after_config() {
+  local status
+
+  if run_install_after_config_steps; then
+    if (( WARP_INSTALL_ACTIVE )); then
+      warp_finalize_install_transaction || return 1
+    fi
+    return 0
+  else
+    status=$?
+  fi
+
+  if (( WARP_INSTALL_ACTIVE )); then
+    echo "错误：安装完成阶段失败，正在恢复 WARP 修改前的文件" >&2
+    if ! warp_rollback_install_transaction; then
+      return 1
+    fi
+    service_restart || true
+  fi
+  return "$status"
 }
 
 write_anytls_client() {
@@ -4381,46 +4560,7 @@ main() {
   fi
 
   write_server_config
-  if (( WARP_INSTALL_ACTIVE )); then
-    trap 'status=$?; trap - ERR; warp_rollback_install_transaction; service_restart || true; exit "$status"' ERR
-  fi
-
-  if (( INSTALL_HY2 )); then
-    if [[ "$HY2_PORT_HOPPING" == "on" ]]; then
-      write_port_hopping_helper
-    else
-      disable_hy2_port_hopping
-    fi
-  elif [[ "$CONFIG_POLICY" == "new" ]]; then
-    disable_hy2_port_hopping
-  fi
-
-  detect_server_ip
-
-  if (( INSTALL_ANYTLS )); then
-    write_anytls_client
-  fi
-
-  if (( INSTALL_VLESS )); then
-    write_vless_client
-  fi
-
-  if (( INSTALL_HY2 )); then
-    write_hy2_clients
-  fi
-
-  if (( INSTALL_SNELL5 || INSTALL_SNELL6 )); then
-    write_snell_clients
-  fi
-
-  service_reload
-  service_enable
-  service_restart
-
-  if (( WARP_INSTALL_ACTIVE )); then
-    trap - ERR
-    warp_finalize_install_transaction
-  fi
+  complete_install_after_config
 
   write_info_files
   print_summary
