@@ -10,6 +10,11 @@ PURGE_SING_BOX=0
 ASSUME_YES=0
 HY2_PORT_HOPPING_EXPLICIT=0
 HOP_PORTS_EXPLICIT=0
+WARP_RULES_INPUT="${WARP_RULES:-}"
+WARP_RULES_JSON="[]"
+WARP_RULES_EXPLICIT=0
+WARP_OFF=0
+WARP_RESET=0
 
 [[ -n "${HY2_PORT_HOPPING+x}" ]] && HY2_PORT_HOPPING_EXPLICIT=1
 [[ -n "${HOP_PORTS+x}" ]] && HOP_PORTS_EXPLICIT=1
@@ -394,6 +399,11 @@ Direct 固定目标中转选项：
       --direct-address     中转目标地址，必须指定
       --direct-target-port 中转目标端口，必须指定
 
+WARP 分流选项：
+      --warp-rules    MetaCubeX geosite 规则名，可用逗号或空格分隔
+      --warp-off      关闭 WARP 分流并保留已注册凭据
+      --warp-reset    重新注册 WARP 凭据；未指定规则时沿用现有列表
+
 通用选项：
   -m, --mode          模式：1-9、anytls、vless、hy2、snell5、snell6、direct、full、uninstall、restore；协议可逗号多选
   -p, --port          当前单协议模式的端口；同时安装时请分别使用各协议端口选项
@@ -419,6 +429,68 @@ append_install_mode() {
     INSTALL_MODE="$mode"
   else
     INSTALL_MODE="${INSTALL_MODE},${mode}"
+  fi
+}
+
+warp_normalize_rules() {
+  local raw token normalized json="" separator=""
+  local -a items normalized_items=()
+  local existing duplicate
+
+  raw="$1"
+  raw="${raw//，/,}"
+  raw="${raw//、/,}"
+  raw="${raw//;/,}"
+  raw="${raw//$'\t'/,}"
+  raw="${raw//$'\n'/,}"
+  raw="${raw// /,}"
+
+  IFS=',' read -r -a items <<< "$raw"
+  for token in "${items[@]}"; do
+    token="${token#"${token%%[![:space:]]*}"}"
+    token="${token%"${token##*[![:space:]]}"}"
+    [[ -n "$token" ]] || continue
+
+    normalized="$(printf '%s' "$token" | tr '[:upper:]' '[:lower:]')"
+    if [[ ! "$normalized" =~ ^[a-z0-9_-]+$ ]]; then
+      echo "错误：无效的 WARP 规则名：$token" >&2
+      return 1
+    fi
+
+    duplicate=0
+    for existing in "${normalized_items[@]}"; do
+      if [[ "$existing" == "$normalized" ]]; then
+        duplicate=1
+        break
+      fi
+    done
+    (( duplicate )) || normalized_items+=("$normalized")
+  done
+
+  if (( ${#normalized_items[@]} == 0 )); then
+    echo "错误：WARP 规则列表不能为空" >&2
+    return 1
+  fi
+
+  for normalized in "${normalized_items[@]}"; do
+    json="${json}${separator}\"${normalized}\""
+    separator=","
+  done
+  printf '[%s]\n' "$json"
+}
+
+warp_validate_cli() {
+  if (( WARP_OFF && (WARP_RULES_EXPLICIT || WARP_RESET) )); then
+    echo "错误：--warp-off 不能与 --warp-rules 或 --warp-reset 同时使用" >&2
+    return 1
+  fi
+
+  if (( WARP_RULES_EXPLICIT )); then
+    WARP_RULES_JSON="$(warp_normalize_rules "$WARP_RULES_INPUT")" || return 1
+  fi
+
+  if (( WARP_RULES_EXPLICIT || WARP_OFF || WARP_RESET )) && [[ -z "$INSTALL_MODE" ]]; then
+    ACTION="warp"
   fi
 }
 
@@ -543,6 +615,23 @@ while [[ $# -gt 0 ]]; do
       DIRECT_TARGET_PORT="${2:-}"
       shift 2
       ;;
+    --warp-rules)
+      if (( $# < 2 )) || [[ -z "${2:-}" || "${2:-}" == -* ]]; then
+        echo "错误：--warp-rules 缺少规则列表" >&2
+        exit 1
+      fi
+      WARP_RULES_INPUT="$2"
+      WARP_RULES_EXPLICIT=1
+      shift 2
+      ;;
+    --warp-off)
+      WARP_OFF=1
+      shift
+      ;;
+    --warp-reset)
+      WARP_RESET=1
+      shift
+      ;;
     -s|--sni|--hy2-sni)
       HY2_SNI="${2:-}"
       shift 2
@@ -627,6 +716,8 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+warp_validate_cli || exit 1
 
 choose_mode() {
   if [[ "$ACTION" != "install" || -n "$INSTALL_MODE" ]]; then
@@ -3571,4 +3662,6 @@ main() {
   print_summary
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi
