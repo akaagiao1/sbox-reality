@@ -42,7 +42,7 @@ jobs:
             [.[] | select(.draft == false and .prerelease == true
               and (.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+-alpha\\.[0-9]+$")))
               | .tag_name]
-            | first
+            | .[0] // empty
           ' <<< "$release_json")"
           test -n "$version"
           version_number="${version#v}"
