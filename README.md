@@ -229,48 +229,51 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 
 ## 多客户节点、流量和到期管理
 
-统一安装脚本支持真正的一键客户节点创建。下面一条命令会完成依赖安装、sing-box 安装、管理命令安装、客户节点创建、独立凭据生成、流量额度和到期时间设置：
+推荐流程是：首次先初始化 VPS、安装节点管理器并配置一次 Telegram；之后每增加一个客户，只创建该客户的节点、额度、重置日和到期时间。
 
-```bash
-SBOX_REALITY_INSTALL_REF=codex/multi-tenant-traffic \
-bash <(curl -fsSL \
-  https://raw.githubusercontent.com/akaagiao1/sbox-reality/codex/multi-tenant-traffic/install.sh) \
-  --customer customer-a \
-  --mode snell5 \
-  --port 25001 \
-  --quota 100G \
-  --reset-day 1 \
-  --expires 2026-12-31
-```
+### 首次初始化
 
-合并到 `main` 后可以去掉 `SBOX_REALITY_INSTALL_REF`：
-
-```bash
-bash <(curl -fsSL \
-  https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) \
-  --customer customer-a \
-  --mode snell5 \
-  --port 25001 \
-  --quota 100G \
-  --reset-day 1 \
-  --expires 2026-12-31
-```
-
-重复执行并更换 `--customer`、`--mode` 和端口，即可给其他客户增加独立节点。已有客户、WARP、路由和自定义入站会保留。
-
-一次安装时也可以直接配置 Telegram：
+分支测试阶段执行：
 
 ```bash
 SBOX_TG_BOT_TOKEN='123456789:AAExampleToken' \
 SBOX_TG_CHAT_ID='123456789,-1001234567890' \
+SBOX_REALITY_INSTALL_REF=codex/multi-tenant-traffic \
+bash <(curl -fsSL \
+  https://raw.githubusercontent.com/akaagiao1/sbox-reality/codex/multi-tenant-traffic/install.sh) \
+  --setup
+```
+
+也可以交互输入 Telegram Token 和 Chat ID：
+
+```bash
 bash <(curl -fsSL \
   https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) \
+  --setup
+```
+
+初始化会安装 sing-box、`sbox-node`、流量检查服务，并发送一条 Telegram 测试通知。合并到 `main` 后可以去掉 `SBOX_REALITY_INSTALL_REF`。
+
+### 初始化后添加客户
+
+首次初始化完成后，不再需要 TG 参数：
+
+```bash
+sbox-node node add customer-a snell5 \
+  --customer customer-a \
+  --port 25001 \
+  --quota 100G \
+  --reset-day 1 \
+  --expires 2026-12-31
+
+sbox-node node add customer-b snell6 \
   --customer customer-b \
-  --mode snell6 \
   --port 25002 \
   --quota 50G \
   --expires 2026-11-30
 ```
+
+如果希望“安装环境并同时创建第一个客户”一步完成，`install.sh --customer ... --mode ...` 的兼容入口仍然保留。已有客户、WARP、路由和自定义入站不会被覆盖。
 
 统一安装脚本不会覆盖已有配置。管理命令会安装到：
 

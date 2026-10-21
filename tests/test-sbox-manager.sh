@@ -245,4 +245,33 @@ assert_true "one-click dispatch should forward customer, quota and expiry" \
     'node add customer-one snell5 .*--port 26001 .*--quota 100G .*--reset-day 1 .*--expires 2027-12-31' \
     "$TMP/one-click.log"
 
+assert_true "first-run setup should configure Telegram before any customer nodes" \
+  env FAKE_MANAGER_LOG="$TMP/setup.log" \
+    SBOX_REALITY_TEST_MODE=1 \
+    bash -c '
+      script=$1
+      shift
+      manager=$1
+      set --
+      source "$script"
+      ACTION=install
+      INSTALL_MODE=""
+      CUSTOMER_ID=""
+      TG_TOKEN=123456:ABCdef
+      TG_CHAT_ID=12345
+      MANAGER_NODE_BIN=$manager
+      detect_platform() { :; }
+      install_dependencies() { :; }
+      install_manager_tool() { :; }
+      enable_bbr_and_fq() { :; }
+      service_enable() { :; }
+      run_manager_setup
+    ' _ "$INSTALL_SCRIPT" "$TMP/fake-manager"
+assert_true "setup should persist Telegram settings and install the traffic timer" \
+  bash -c '
+    grep -Fq "notify setup 123456:ABCdef 12345" "$1"
+    grep -Fq "notify test" "$1"
+    grep -Fq "traffic timer" "$1"
+  ' _ "$TMP/setup.log"
+
 printf 'PASS: %s assertions (multi-tenant manager)\n' "$PASS"

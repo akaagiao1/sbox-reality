@@ -1491,6 +1491,7 @@ usage() {
   sbox-node traffic show [ID]
   sbox-node traffic reset|pause|resume|unset ID
   sbox-node traffic check
+  sbox-node traffic timer
   sbox-node notify setup TOKEN CHAT_ID
   sbox-node notify test
   sbox-node cleanup [--purge]
@@ -1533,6 +1534,7 @@ main() {
         resume) cmd_traffic_resume "$@" ;;
         unset|remove) cmd_traffic_unset "$@" ;;
         check) cmd_traffic_check_once ;;
+        timer|install-timer) ensure_traffic_timer ;;
         daemon) traffic_daemon ;;
         *) usage; exit 2 ;;
       esac

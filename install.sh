@@ -9,6 +9,7 @@ CUSTOMER_RESET_DAY="${CUSTOMER_RESET_DAY:-1}"
 CUSTOMER_EXPIRES="${CUSTOMER_EXPIRES:-}"
 TG_TOKEN="${SBOX_TG_BOT_TOKEN:-}"
 TG_CHAT_ID="${SBOX_TG_CHAT_ID:-}"
+INIT_MANAGER="${INIT_MANAGER:-0}"
 ACTION="install"
 ACTION_RESTORE_EXPLICIT=0
 ACTION_UNINSTALL_EXPLICIT=0
@@ -497,6 +498,7 @@ usage() {
   bash $0 anytls hy2 vless
   bash $0 --mode full
   bash $0 --restore
+  bash $0 --setup [--tg-token TOKEN --tg-chat-id CHAT]
   bash $0 --uninstall anytls|vless|hy2|snell5|snell6|direct|all
 
 安装模式：
@@ -575,6 +577,7 @@ WARP 分流选项：
       --expires       客户节点到期时间，YYYY-MM-DD 或 YYYY-MM-DD HH:MM:SS
       --tg-token      Telegram Bot Token（也可用 SBOX_TG_BOT_TOKEN）
       --tg-chat-id    Telegram Chat ID（也可用 SBOX_TG_CHAT_ID）
+      --setup         首次安装节点管理器并配置 Telegram，不创建客户节点
   -h, --help          显示帮助
 
 环境变量：
@@ -1554,6 +1557,10 @@ while [[ $# -gt 0 ]]; do
     --tg-chat-id)
       TG_CHAT_ID="${2:-}"
       shift 2
+      ;;
+    --setup|--init-manager)
+      INIT_MANAGER=1
+      shift
       ;;
     1|anytls|reality)
       append_install_mode "1"
@@ -5358,6 +5365,70 @@ run_customer_install() {
   echo "使用 sbox-node node list 查看所有客户节点。"
 }
 
+prompt_telegram_setup() {
+  local answer
+
+  if [[ -n "$TG_TOKEN" || -n "$TG_CHAT_ID" ]]; then
+    [[ -n "$TG_TOKEN" && -n "$TG_CHAT_ID" ]] \
+      || { echo "错误：Telegram Token 和 Chat ID 必须同时提供" >&2; exit 1; }
+    return 0
+  fi
+  [[ -t 0 ]] || {
+    echo "错误：首次初始化需要配置 Telegram；非交互模式请同时提供 --tg-token 和 --tg-chat-id" >&2
+    exit 1
+  }
+  read -rp "是否现在配置 Telegram 通知？[Y/n]：" answer
+  case "${answer:-Y}" in
+    n|N|no|NO) return 1 ;;
+  esac
+  read -rsp "Telegram Bot Token：" TG_TOKEN
+  echo
+  read -rp "Telegram Chat ID（多个用英文逗号分隔）：" TG_CHAT_ID
+  [[ -n "$TG_TOKEN" && -n "$TG_CHAT_ID" ]] \
+    || { echo "错误：Telegram Token 和 Chat ID 不能为空" >&2; exit 1; }
+}
+
+run_manager_setup() {
+  local telegram_configured=0
+
+  [[ "$ACTION" == "install" ]] \
+    || { echo "错误：--setup 不能和卸载、恢复动作同时使用" >&2; exit 1; }
+  [[ -z "$CUSTOMER_ID" && -z "$INSTALL_MODE" ]] \
+    || { echo "错误：--setup 只做首次初始化；创建客户请使用 --customer 或 sbox-node node add" >&2; exit 1; }
+  if [[ $EUID -ne 0 && "${SBOX_REALITY_TEST_MODE:-0}" != "1" ]]; then
+    echo "错误：请使用 root 用户运行"
+    exit 1
+  fi
+
+  detect_platform
+  install_dependencies
+  install_manager_tool
+  enable_bbr_and_fq
+  service_enable || true
+
+  if prompt_telegram_setup; then
+    "$MANAGER_NODE_BIN" notify setup "$TG_TOKEN" "$TG_CHAT_ID"
+    if "$MANAGER_NODE_BIN" notify test; then
+      telegram_configured=1
+    else
+      echo "警告：Telegram 测试消息发送失败，请检查 Token、Chat ID 或机器人权限" >&2
+    fi
+  else
+    echo "已跳过 Telegram 配置；之后可运行 sbox-node notify setup TOKEN CHAT_ID"
+  fi
+  "$MANAGER_NODE_BIN" traffic timer >/dev/null 2>&1 || true
+
+  echo
+  echo "首次初始化完成。"
+  if (( telegram_configured )); then
+    echo "Telegram 通知：已配置并测试"
+  else
+    echo "Telegram 通知：未配置"
+  fi
+  echo "下一步添加客户："
+  echo "  sbox-node node add customer-a snell5 --port 25001 --quota 100G --expires 2026-12-31"
+}
+
 main() {
   if [[ -n "$MANAGEMENT_MODE" ]]; then
     if [[ -x "$MANAGER_NODE_BIN" ]]; then
@@ -5367,6 +5438,10 @@ main() {
     exit 1
   fi
 
+  if (( INIT_MANAGER )); then
+    run_manager_setup
+    return 0
+  fi
   choose_mode
   if [[ -n "$CUSTOMER_ID" ]]; then
     run_customer_install
