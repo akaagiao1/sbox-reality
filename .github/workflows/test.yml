@@ -69,9 +69,8 @@ jobs:
           echo "asset_id=${asset_id}" >> "$GITHUB_OUTPUT"
           echo "Selected $version ($asset_name)"
 
-      - name: Download and verify sing-box Alpha
+      - name: Download sing-box Alpha asset
         env:
-          DIGEST: ${{ steps.alpha.outputs.digest }}
           ASSET_ID: ${{ steps.alpha.outputs.asset_id }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -81,6 +80,13 @@ jobs:
             -H "Authorization: Bearer ${GITHUB_TOKEN}" \
             "https://api.github.com/repos/SagerNet/sing-box/releases/assets/${ASSET_ID}" \
             -o /tmp/sing-box.tar.gz
+          test -s /tmp/sing-box.tar.gz
+
+      - name: Verify and extract sing-box Alpha
+        env:
+          DIGEST: ${{ steps.alpha.outputs.digest }}
+        run: |
+          set -euo pipefail
           echo "${DIGEST#sha256:}  /tmp/sing-box.tar.gz" | sha256sum -c -
           tar -xzf /tmp/sing-box.tar.gz -C /tmp
           binary="$(find /tmp -type f -name sing-box -perm -111 | head -n 1)"
