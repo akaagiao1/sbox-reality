@@ -1,0 +1,106 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  shell:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck jq openssl ripgrep
+
+      - name: Static checks
+        run: |
+          bash -n install.sh
+          bash -n reality.sh
+          bash -n install-anytls-reality.sh
+          bash -n install-hysteria2-surge.sh
+          bash -n tests/test-warp-routing.sh
+          shellcheck -S warning install.sh reality.sh install-anytls-reality.sh install-hysteria2-surge.sh tests/test-warp-routing.sh
+
+      - name: Resolve latest sing-box Alpha
+        id: alpha
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="$(
+            git ls-remote --tags https://github.com/SagerNet/sing-box.git 'v*-alpha.*' \
+              | awk '{ sub(/^refs\/tags\/v/, "", $2); print $2 }' \
+              | awk '/^[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+$/' \
+              | sort -V \
+              | tail -n 1
+          )"
+          test -n "$version"
+          version_number="${version#v}"
+          asset_name="sing-box-${version_number}-linux-amd64.tar.gz"
+          release_json="$(curl -fsSL \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            "https://api.github.com/repos/SagerNet/sing-box/releases/tags/v${version}")"
+          digest="$(jq -r --arg name "$asset_name" '
+            .assets[] | select(.name == $name) | .digest // empty
+          ' <<< "$release_json")"
+          test -n "$digest"
+          download_url="$(jq -r --arg name "$asset_name" '
+            .assets[] | select(.name == $name) | .browser_download_url // empty
+          ' <<< "$release_json")"
+          test -n "$download_url"
+          asset_id="$(jq -r --arg name "$asset_name" '
+            .assets[] | select(.name == $name) | .id // empty
+          ' <<< "$release_json")"
+          test -n "$asset_id"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "asset_name=${asset_name}" >> "$GITHUB_OUTPUT"
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+          echo "download_url=${download_url}" >> "$GITHUB_OUTPUT"
+          echo "asset_id=${asset_id}" >> "$GITHUB_OUTPUT"
+          echo "Selected $version ($asset_name)"
+
+      - name: Download sing-box Alpha asset
+        env:
+          ASSET_ID: ${{ steps.alpha.outputs.asset_id }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 --retry-all-errors --retry-delay 2 \
+            -H "Accept: application/octet-stream" \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            "https://api.github.com/repos/SagerNet/sing-box/releases/assets/${ASSET_ID}" \
+            -o /tmp/sing-box.tar.gz
+          test -s /tmp/sing-box.tar.gz
+
+      - name: Verify sing-box Alpha checksum
+        env:
+          DIGEST: ${{ steps.alpha.outputs.digest }}
+        run: |
+          set -euo pipefail
+          echo "${DIGEST#sha256:}  /tmp/sing-box.tar.gz" | sha256sum -c -
+
+      - name: Extract sing-box Alpha
+        env:
+          VERSION: ${{ steps.alpha.outputs.version }}
+        run: |
+          set -euo pipefail
+          tar -xzf /tmp/sing-box.tar.gz -C /tmp
+          version_number="${VERSION#v}"
+          binary="/tmp/sing-box-${version_number}-linux-amd64/sing-box"
+          test -x "$binary"
+          echo "SING_BOX_TEST_BIN=$binary" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$(dirname "$binary")" >> "$GITHUB_ENV"
+          "$binary" version
+
+      - name: Run tests
+        run: bash tests/test-warp-routing.sh all

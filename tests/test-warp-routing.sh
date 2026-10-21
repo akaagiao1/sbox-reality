@@ -6,6 +6,8 @@ INSTALL_SCRIPT="$ROOT_DIR/install.sh"
 TEST_GROUP="${1:-all}"
 PASS_COUNT=0
 TEST_TMP="$(mktemp -d)"
+SING_BOX_TEST_BIN="${SING_BOX_TEST_BIN:-$(command -v sing-box 2>/dev/null || true)}"
+export SBOX_REALITY_TEST_MODE=1
 trap 'rm -rf "$TEST_TMP"' EXIT
 
 fail() {
@@ -35,6 +37,18 @@ assert_succeeds() {
   local message="$1"
   shift
   "$@" >/dev/null 2>&1 || fail "$message (command failed)"
+  PASS_COUNT=$(( PASS_COUNT + 1 ))
+}
+
+assert_mode_600() {
+  local file="$1"
+  local message="$2"
+
+  [[ -s "$file" ]] || fail "$message (file is empty or missing)"
+  if [[ "$OSTYPE" != cygwin* ]]; then
+    [[ "$(stat -c '%a' "$file")" == "600" ]] \
+      || fail "$message (actual mode: $(stat -c '%a' "$file"))"
+  fi
   PASS_COUNT=$(( PASS_COUNT + 1 ))
 }
 
@@ -450,7 +464,7 @@ JSON
       grep -Fx "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo-lite/geosite/netflix.srs" "$1"
     ' _ "$TEST_TMP/probed-urls.txt"
 
-  if [[ -x /workspace/.sbox-dev/bin/sing-box ]]; then
+  if [[ -n "$SING_BOX_TEST_BIN" && -x "$SING_BOX_TEST_BIN" ]]; then
     cat > "$TEST_TMP/schema-base.json" <<'JSON'
 {
   "inbounds": [{"type":"mixed","tag":"test-in","listen":"127.0.0.1","listen_port":2080}],
@@ -460,10 +474,10 @@ JSON
     assert_succeeds "generated WARP config should pass sing-box schema validation" \
       merge_warp_config "$TEST_TMP/schema-base.json" "$credentials" '["youtube"]' "$TEST_TMP/schema-merged.json"
     assert_succeeds "sing-box should accept the generated WARP config" \
-      /workspace/.sbox-dev/bin/sing-box check -c "$TEST_TMP/schema-merged.json"
+      "$SING_BOX_TEST_BIN" check -c "$TEST_TMP/schema-merged.json"
     assert_succeeds "rule downloader must start without deprecated-feature overrides" \
       python3 "$ROOT_DIR/tests/check-ruleset-startup.py" \
-        /workspace/.sbox-dev/bin/sing-box "$TEST_TMP/schema-merged.json"
+        "$SING_BOX_TEST_BIN" "$TEST_TMP/schema-merged.json"
     cp "$TEST_TMP/schema-merged.json" /tmp/sbox-warp-generated-test.json
   fi
 }
@@ -478,7 +492,7 @@ run_warp_apply() {
   local restart_count="$7"
   local failure="${8:-none}"
 
-  SERVER_CONF="$config" WARP_CREDENTIALS_FILE="$credentials" \
+  SERVER_CONF_OVERRIDE="$config" WARP_CREDENTIALS_FILE_OVERRIDE="$credentials" \
     bash -c '
       script=$1; registration_fixture=$2; rules_json=$3; reset=$4
       register_count=$5; restart_count=$6; failure=$7
@@ -519,7 +533,7 @@ run_warp_off() {
   local credentials="$2"
   local restart_count="$3"
 
-  SERVER_CONF="$config" WARP_CREDENTIALS_FILE="$credentials" \
+  SERVER_CONF_OVERRIDE="$config" WARP_CREDENTIALS_FILE_OVERRIDE="$credentials" \
     bash -c '
       script=$1; restart_count=$2; set --; source "$script"
       run_sing_box() { return 0; }
@@ -558,8 +572,8 @@ JSON
       "$register_count" "$restart_count"
   assert_eq '1' "$(cat "$register_count")" "first enable should register once"
   assert_eq '1' "$(cat "$restart_count")" "first enable should restart once"
-  assert_eq '600' "$(stat -c '%a' "$config")" "server config mode should be 600"
-  assert_eq '600' "$(stat -c '%a' "$credentials")" "credential mode should be 600"
+  assert_mode_600 "$config" "server config mode should be 600"
+  assert_mode_600 "$credentials" "credential mode should be 600"
   assert_succeeds "first enable should install youtube routing" \
     jq -e '.route.rules[1].rule_set == ["sbox-warp-geosite-youtube"]' "$config"
 
@@ -663,7 +677,7 @@ JSON
   printf 'new-config\n' > "$staged_config"
   printf 'new-credentials\n' > "$staged_credentials"
   assert_fails "failed snapshot copy should abort before replacing formal files" \
-    env SERVER_CONF="$snapshot_config" WARP_CREDENTIALS_FILE="$snapshot_credentials" \
+    env SERVER_CONF_OVERRIDE="$snapshot_config" WARP_CREDENTIALS_FILE_OVERRIDE="$snapshot_credentials" \
       bash -c '
         script=$1; staged_config=$2; staged_credentials=$3
         set --; source "$script"
@@ -694,7 +708,7 @@ JSON
   printf 'new-config\n' > "$restore_root/staged-config.json"
   printf 'new-credentials\n' > "$restore_root/staged-credentials.json"
   assert_fails "failed rollback copy should retain intact recovery snapshots" \
-    env SERVER_CONF="$restore_root/config.json" WARP_CREDENTIALS_FILE="$restore_root/credentials.json" \
+    env SERVER_CONF_OVERRIDE="$restore_root/config.json" WARP_CREDENTIALS_FILE_OVERRIDE="$restore_root/credentials.json" \
       bash -c '
         script=$1; staged_config=$2; staged_credentials=$3; recovery_path=$4
         set --; source "$script"
@@ -726,9 +740,9 @@ JSON
   mkdir -p "$backup_failure_root"
   printf 'must-survive\n' > "$backup_failure_root/config.json"
   assert_fails "failed backup copy should be reported before a transaction continues" \
-    env SERVER_CONF="$backup_failure_root/config.json" \
-      WARP_CREDENTIALS_FILE="$backup_failure_root/missing-credentials.json" \
-      BACKUP_ROOT="$backup_failure_root/backups" \
+    env SERVER_CONF_OVERRIDE="$backup_failure_root/config.json" \
+      WARP_CREDENTIALS_FILE_OVERRIDE="$backup_failure_root/missing-credentials.json" \
+      BACKUP_ROOT_OVERRIDE="$backup_failure_root/backups" \
       bash -c '
         script=$1
         set --; source "$script"
@@ -763,7 +777,7 @@ test_integration() {
     "interactive WARP prompt should accept and normalize multiple rules"
 
   write_test_credentials "$staged_credentials"
-  SERVER_CONF="$config" WARP_CREDENTIALS_FILE="$credentials" \
+  SERVER_CONF_OVERRIDE="$config" WARP_CREDENTIALS_FILE_OVERRIDE="$credentials" \
     bash -c '
       script=$1; staged_credentials=$2; check_count=$3
       set --; source "$script"
@@ -782,6 +796,7 @@ test_integration() {
         return 0
       }
       write_server_config
+      finalize_install_transaction
       warp_finalize_install_transaction
     ' _ "$INSTALL_SCRIPT" "$staged_credentials" "$check_count"
   assert_eq '1' "$(cat "$check_count")" \
@@ -792,22 +807,22 @@ test_integration() {
       and ([.endpoints[] | select(.tag == "sbox-warp-out")] | length) == 1
       and .route.rules[1].rule_set == ["sbox-warp-geosite-youtube"]
     ' "$config"
-  assert_succeeds "combined install should place staged credentials" \
-    bash -c 'test -s "$1" && test "$(stat -c %a "$1")" = 600' _ "$credentials"
+  assert_mode_600 "$credentials" "combined install should place staged credentials in mode 600"
 
   local rollback_root="$TEST_TMP/combined-rollback"
   mkdir -p "$rollback_root"
   printf 'old-config\n' > "$rollback_root/config.json"
   printf 'old-credentials\n' > "$rollback_root/credentials.json"
   assert_fails "nested service restart failure should roll back combined installation" \
-    env SERVER_CONF="$rollback_root/config.json" \
-      WARP_CREDENTIALS_FILE="$rollback_root/credentials.json" \
+    env SERVER_CONF_OVERRIDE="$rollback_root/config.json" \
+      WARP_CREDENTIALS_FILE_OVERRIDE="$rollback_root/credentials.json" \
       bash -c '
         script=$1; restart_count=$2
         set --; source "$script"
         WARP_INSTALL_ACTIVE=1
-        WARP_INSTALL_STAGE_DIR="$(mktemp -d "$(dirname "$SERVER_CONF")/.stage.XXXXXX")"
-        warp_begin_install_transaction
+        begin_install_transaction
+        INSTALL_SERVICE_WAS_ACTIVE=1
+        INSTALL_SERVICE_WAS_ENABLED=1
         printf "new-config\n" > "$SERVER_CONF"
         printf "new-credentials\n" > "$WARP_CREDENTIALS_FILE"
         CONFIG_POLICY=merge
@@ -831,7 +846,7 @@ test_integration() {
     "combined rollback should restore credentials"
 
   assert_succeeds "combined install should back up before staging new credentials" \
-    env SERVER_CONF="$config" WARP_CREDENTIALS_FILE="$credentials" bash -c '
+    env SERVER_CONF_OVERRIDE="$config" WARP_CREDENTIALS_FILE_OVERRIDE="$credentials" bash -c '
       script=$1; order_file=$2; fixture=$3
       set --; source "$script"
       WARP_RULES_EXPLICIT=1
@@ -847,7 +862,7 @@ test_integration() {
       warp_finalize_install_transaction
     ' _ "$INSTALL_SCRIPT" "$TEST_TMP/install-order.txt" "$credentials"
 
-  BACKUP_ROOT="$backup_root" SERVER_CONF="$config" WARP_CREDENTIALS_FILE="$credentials" \
+  BACKUP_ROOT_OVERRIDE="$backup_root" SERVER_CONF_OVERRIDE="$config" WARP_CREDENTIALS_FILE_OVERRIDE="$credentials" \
     bash -c '
       script=$1; set --; source "$script"
       backup_existing_files integration-test
@@ -866,10 +881,187 @@ test_integration() {
 
   assert_succeeds "README should document WARP commands, source, and secret path" \
     bash -c '
-      rg -q -- "--warp-rules" "$1"
-      rg -q "MetaCubeX/meta-rules-dat" "$1"
-      rg -q "/etc/sing-box/sbox-warp-credentials.credentials" "$1"
+      grep -Fq -- "--warp-rules" "$1"
+      grep -Fq "MetaCubeX/meta-rules-dat" "$1"
+      grep -Fq "/etc/sing-box/sbox-warp-credentials.credentials" "$1"
     ' _ "$ROOT_DIR/README.md"
+}
+
+test_hardening() {
+  local backup_test="$TEST_TMP/backup-safety"
+  local keep_backup="$backup_test/managed-keep"
+  local old_backup="$backup_test/managed-old"
+  local unrelated="$backup_test/unrelated"
+  local port_config="$TEST_TMP/port-config.json"
+  local tx_config="$TEST_TMP/transaction/config.json"
+  local tx_output="$TEST_TMP/transaction/output"
+
+  assert_fails "general option without value should fail clearly" \
+    source_with_args --server-host
+  assert_fails "restore and uninstall should conflict" \
+    source_with_args --restore --uninstall all
+  assert_fails "external action and --mode should conflict" \
+    source_with_args --uninstall all --mode anytls
+
+  assert_succeeds "server host validation should accept IPv4, IPv6 and DNS" \
+    bash -c '
+      script=$1; set --; source "$script"
+      validate_server_host 1.2.3.4
+      validate_server_host 2001:db8::1
+      validate_server_host example.com
+      [[ "$(url_host 2001:db8::1)" == "[2001:db8::1]" ]]
+    ' _ "$INSTALL_SCRIPT"
+  assert_fails "server host validation should reject invalid values" \
+    bash -c 'script=$1; set --; source "$script"; validate_server_host "bad host"' _ "$INSTALL_SCRIPT"
+
+  mkdir -p "$keep_backup" "$old_backup" "$unrelated"
+  printf 'keep\n' > "$keep_backup/config.json"
+  printf 'old\n' > "$old_backup/config.json"
+  printf 'unrelated\n' > "$unrelated/important"
+  : > "$keep_backup/.sbox-reality-backup"
+  : > "$old_backup/.sbox-reality-backup"
+  assert_succeeds "backup pruning should only delete marked installer backups" \
+    env SERVER_CONF_OVERRIDE="$TEST_TMP/backup-safety/config.json" \
+      BACKUP_ROOT_OVERRIDE="$backup_test" bash -c '
+        script=$1; keep=$2; old=$3; unrelated=$4
+        set --; source "$script"
+        prune_backups_except "$keep"
+        [[ -d "$keep" && ! -e "$old" && -f "$unrelated/important" ]]
+      ' _ "$INSTALL_SCRIPT" "$keep_backup" "$old_backup" "$unrelated"
+
+  jq -n '{
+    inbounds: [
+      {type:"anytls", tag:"anytls-in", listen:"::", listen_port:25000}
+    ],
+    outbounds: [{type:"direct"}]
+  }' > "$port_config"
+  assert_fails "new protocol should not reuse an unselected managed port" \
+    env SERVER_CONF_OVERRIDE="$port_config" bash -c '
+      script=$1; set --; source "$script"
+      CONFIG_POLICY=merge
+      INSTALL_VLESS=1
+      validate_planned_port_against_existing_config tcp 25000 VLESS
+    ' _ "$INSTALL_SCRIPT"
+  assert_succeeds "replacing the same managed tag may reuse its port" \
+    env SERVER_CONF_OVERRIDE="$port_config" bash -c '
+      script=$1; set --; source "$script"
+      CONFIG_POLICY=merge
+      INSTALL_ANYTLS=1
+      validate_planned_port_against_existing_config tcp 25000 AnyTLS
+    ' _ "$INSTALL_SCRIPT"
+
+  mkdir -p "$(dirname "$tx_config")" "$tx_output"
+  printf 'old-config\n' > "$tx_config"
+  printf 'old-client\n' > "$tx_output/client.json"
+  assert_succeeds "generic install transaction should restore config and client outputs" \
+    env SERVER_CONF_OVERRIDE="$tx_config" OUTPUT_DIR_OVERRIDE="$tx_output" bash -c '
+      script=$1; config=$2; output=$3
+      set --; source "$script"
+      begin_install_transaction
+      printf "new-config\n" > "$config"
+      rm -f "$output/client.json"
+      printf "new-client\n" > "$output/new.json"
+      rollback_install_transaction
+      [[ "$(cat "$config")" == "old-config" ]]
+      [[ "$(cat "$output/client.json")" == "old-client" ]]
+      [[ ! -e "$output/new.json" ]]
+    ' _ "$INSTALL_SCRIPT" "$tx_config" "$tx_output"
+}
+
+test_protocol_schema() {
+  local schema_dir="$TEST_TMP/protocol-schema"
+
+  if [[ -z "$SING_BOX_TEST_BIN" || ! -x "$SING_BOX_TEST_BIN" ]]; then
+    echo "SKIP: protocol schema tests require SING_BOX_TEST_BIN"
+    return 0
+  fi
+
+  mkdir -p "$schema_dir/output"
+  openssl req -x509 -nodes \
+    -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+    -days 1 -keyout "$schema_dir/key.pem" -out "$schema_dir/cert.pem" \
+    -subj "/CN=www.bing.com" >/dev/null 2>&1
+
+  bash -c '
+    script=$1; directory=$2
+    set --; source "$script"
+    OUTPUT_DIR="$directory/output"
+    ANYTLS_CLIENT_OUT="$OUTPUT_DIR/anytls.json"
+    VLESS_CLIENT_OUT="$OUTPUT_DIR/vless.json"
+    HY2_CLIENT_OUT="$OUTPUT_DIR/hy2.json"
+    SNELL5_CLIENT_OUT="$OUTPUT_DIR/snell5.json"
+    SNELL6_CLIENT_OUT="$OUTPUT_DIR/snell6.json"
+    ANYTLS_URL_FILE="$OUTPUT_DIR/anytls-url.txt"
+    ANYTLS_SURGE_CONF="$OUTPUT_DIR/anytls-surge.conf"
+    VLESS_URL_FILE="$OUTPUT_DIR/vless-url.txt"
+    VLESS_SURGE_CONF="$OUTPUT_DIR/vless-surge.conf"
+    HY2_URL_FILE="$OUTPUT_DIR/hy2-url.txt"
+    SURGE_CONF="$OUTPUT_DIR/hy2-surge.conf"
+    SNELL5_URL_FILE="$OUTPUT_DIR/snell5-url.txt"
+    SNELL5_SURGE_CONF="$OUTPUT_DIR/snell5-surge.conf"
+    SNELL6_URL_FILE="$OUTPUT_DIR/snell6-url.txt"
+    SNELL6_SURGE_CONF="$OUTPUT_DIR/snell6-surge.conf"
+    SNELL_SURGE_CONF="$OUTPUT_DIR/snell-surge.conf"
+    INSTALL_ANYTLS=1
+    INSTALL_VLESS=1
+    INSTALL_HY2=1
+    INSTALL_SNELL5=1
+    INSTALL_SNELL6=1
+    ANYTLS_PORT=21001
+    VLESS_PORT=21002
+    HY2_PORT=21003
+    SNELL5_PORT=21004
+    SNELL6_PORT=21005
+    REALITY_DOMAIN=www.apple.com
+    VLESS_DOMAIN=www.apple.com
+    ANYTLS_PRIVATE_KEY=aLGSmo_RQnjngdPeQve8roGrhNM5bbDmJOrMFgT4Hk8
+    ANYTLS_PUBLIC_KEY=OseeW1QCGvBgl7Eb0SKAQiuwH1VWYEzjoRn9xncV1FM
+    ANYTLS_PASSWORD=anytls-test-password
+    ANYTLS_SHORT_ID=0123456789abcdef
+    VLESS_PRIVATE_KEY=aLGSmo_RQnjngdPeQve8roGrhNM5bbDmJOrMFgT4Hk8
+    VLESS_PUBLIC_KEY=OseeW1QCGvBgl7Eb0SKAQiuwH1VWYEzjoRn9xncV1FM
+    VLESS_UUID=509c1e7b-9f5d-42b8-91b2-ddb8cf2a8673
+    VLESS_SHORT_ID=0123456789abcdef
+    HY2_PASSWORD=hy2-test-password
+    HY2_SNI=www.bing.com
+    OBFS=gecko
+    OBFS_PASSWORD="obfs-\\\"quoted-password"
+    GECKO_MIN_PACKET_SIZE=512
+    GECKO_MAX_PACKET_SIZE=1200
+    HY2_PORT_HOPPING=on
+    HOP_INTERVAL=30
+    NORMALIZED_HOP_PORTS=20000-50000
+    SERVER_PORTS_JSON="[\"20000:50000\"]"
+    SNELL5_PSK=snell5-test-password
+    SNELL6_PSK=snell6-test-password
+    SNELL5_OBFS_MODE=http
+    SNELL6_MODE=default
+    CERT_PATH="$directory/cert.pem"
+    KEY_PATH="$directory/key.pem"
+    SERVER_IP=127.0.0.1
+    SERVER_URL_HOST=127.0.0.1
+    PROXY_NAME=HY2
+    write_fresh_server_config "$directory/server.json"
+    write_anytls_client
+    write_vless_client
+    write_hy2_clients
+    write_snell_clients
+  ' _ "$INSTALL_SCRIPT" "$schema_dir"
+
+  assert_succeeds "all generated server and client configs should pass the current Alpha schema" \
+    bash -c '
+      binary=$1
+      shift
+      for config in "$@"; do
+        "$binary" check -c "$config"
+      done
+    ' _ "$SING_BOX_TEST_BIN" \
+      "$schema_dir/server.json" \
+      "$schema_dir/output/anytls.json" \
+      "$schema_dir/output/vless.json" \
+      "$schema_dir/output/hy2.json" \
+      "$schema_dir/output/snell5.json" \
+      "$schema_dir/output/snell6.json"
 }
 
 test_directory_loading() {
@@ -877,33 +1069,33 @@ test_directory_loading() {
   local credential_name
   mkdir -p "$config_dir"
   printf '{"outbounds":[{"type":"direct"}]}\n' > "$config_dir/config.json"
-  credential_name="$(env -u WARP_CREDENTIALS_FILE bash -c '
+  credential_name="$(env -u WARP_CREDENTIALS_FILE_OVERRIDE bash -c '
     script=$1; set --; source "$script"; basename "$WARP_CREDENTIALS_FILE"
   ' _ "$INSTALL_SCRIPT")"
   write_test_credentials "$config_dir/$credential_name"
-  if [[ -x /workspace/.sbox-dev/bin/sing-box ]]; then
+  if [[ -n "$SING_BOX_TEST_BIN" && -x "$SING_BOX_TEST_BIN" ]]; then
     assert_succeeds "service directory loading must ignore WARP credentials" \
-      /workspace/.sbox-dev/bin/sing-box check -C "$config_dir"
+      "$SING_BOX_TEST_BIN" check -C "$config_dir"
   fi
   rm -f "$config_dir/$credential_name"
   write_test_credentials "$config_dir/sbox-warp-credentials.json"
   assert_succeeds "legacy credentials should migrate without changing their contents" \
-    env WARP_CREDENTIALS_FILE="$config_dir/sbox-warp-credentials.credentials" bash -c '
+    env WARP_CREDENTIALS_FILE_OVERRIDE="$config_dir/sbox-warp-credentials.credentials" bash -c '
       script=$1; set --; source "$script"
       legacy="$(dirname "$WARP_CREDENTIALS_FILE")/sbox-warp-credentials.json"
       digest="$(sha256sum "$legacy" | cut -d " " -f 1)"
       warp_migrate_legacy_credentials
       [[ ! -e "$legacy" ]]
       [[ "$(sha256sum "$WARP_CREDENTIALS_FILE" | cut -d " " -f 1)" == "$digest" ]]
-      [[ "$(stat -c %a "$WARP_CREDENTIALS_FILE")" == 600 ]]
+      [[ "$OSTYPE" == cygwin* || "$(stat -c %a "$WARP_CREDENTIALS_FILE")" == 600 ]]
       warp_migrate_legacy_credentials
     ' _ "$INSTALL_SCRIPT"
-  if [[ -x /workspace/.sbox-dev/bin/sing-box ]]; then
+  if [[ -n "$SING_BOX_TEST_BIN" && -x "$SING_BOX_TEST_BIN" ]]; then
     assert_succeeds "directory loading should work after migrating legacy credentials" \
-      /workspace/.sbox-dev/bin/sing-box check -C "$config_dir"
+      "$SING_BOX_TEST_BIN" check -C "$config_dir"
   fi
   assert_succeeds "different legacy credentials must never overwrite current credentials" \
-    env WARP_CREDENTIALS_FILE="$config_dir/sbox-warp-credentials.credentials" bash -c '
+    env WARP_CREDENTIALS_FILE_OVERRIDE="$config_dir/sbox-warp-credentials.credentials" bash -c '
       script=$1; set --; source "$script"
       legacy="$(dirname "$WARP_CREDENTIALS_FILE")/sbox-warp-credentials.json"
       printf "different\n" > "$legacy"
@@ -914,7 +1106,7 @@ test_directory_loading() {
       rm "$legacy"
     ' _ "$INSTALL_SCRIPT"
   assert_succeeds "old backup credentials should restore directly to the safe filename" \
-    env WARP_CREDENTIALS_FILE="$config_dir/sbox-warp-credentials.credentials" bash -c '
+    env WARP_CREDENTIALS_FILE_OVERRIDE="$config_dir/sbox-warp-credentials.credentials" bash -c '
       script=$1; set --; source "$script"
       backup="$(mktemp -d)"
       cp "$WARP_CREDENTIALS_FILE" "$backup/sbox-warp-credentials.json"
@@ -945,6 +1137,12 @@ case "$TEST_GROUP" in
   integration)
     test_integration
     ;;
+  hardening)
+    test_hardening
+    ;;
+  schema)
+    test_protocol_schema
+    ;;
   all)
     test_directory_loading
     test_normalization
@@ -952,6 +1150,8 @@ case "$TEST_GROUP" in
     test_config
     test_transaction
     test_integration
+    test_hardening
+    test_protocol_schema
     ;;
   *)
     fail "unknown test group: $TEST_GROUP"

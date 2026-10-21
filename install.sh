@@ -4,6 +4,8 @@ set -euo pipefail
 INSTALL_MODE="${INSTALL_MODE:-}"
 SHARED_PORT="${PORT:-}"
 ACTION="install"
+ACTION_RESTORE_EXPLICIT=0
+ACTION_UNINSTALL_EXPLICIT=0
 UNINSTALL_SCOPE="${UNINSTALL_SCOPE:-}"
 CONFIG_POLICY="${CONFIG_POLICY:-ask}"
 PURGE_SING_BOX=0
@@ -22,6 +24,10 @@ WARP_INSTALL_STAGE_DIR=""
 WARP_INSTALL_SNAPSHOT_DIR=""
 WARP_INSTALL_CONFIG_EXISTED=0
 WARP_INSTALL_CREDENTIALS_EXISTED=0
+INSTALL_TRANSACTION_ACTIVE=0
+INSTALL_TRANSACTION_DIR=""
+INSTALL_SERVICE_WAS_ACTIVE=0
+INSTALL_SERVICE_WAS_ENABLED=0
 
 [[ -n "${HY2_PORT_HOPPING+x}" ]] && HY2_PORT_HOPPING_EXPLICIT=1
 [[ -n "${HOP_PORTS+x}" ]] && HOP_PORTS_EXPLICIT=1
@@ -37,6 +43,7 @@ SNELL6_MODE="${SNELL6_MODE:-default}"
 DIRECT_PORT="${DIRECT_PORT:-auto}"
 DIRECT_TARGET_ADDRESS="${DIRECT_TARGET_ADDRESS:-}"
 DIRECT_TARGET_PORT="${DIRECT_TARGET_PORT:-}"
+SERVER_HOST="${SERVER_HOST:-}"
 HIGH_PORT_MIN="${HIGH_PORT_MIN:-20000}"
 HIGH_PORT_MAX="${HIGH_PORT_MAX:-65535}"
 
@@ -53,8 +60,8 @@ GECKO_MIN_PACKET_SIZE="${GECKO_MIN_PACKET_SIZE:-512}"
 GECKO_MAX_PACKET_SIZE="${GECKO_MAX_PACKET_SIZE:-1200}"
 PROXY_NAME="${PROXY_NAME:-HY2}"
 
-SERVER_CONF="${SERVER_CONF:-/etc/sing-box/config.json}"
-WARP_CREDENTIALS_FILE="${WARP_CREDENTIALS_FILE:-/etc/sing-box/sbox-warp-credentials.credentials}"
+SERVER_CONF="/etc/sing-box/config.json"
+WARP_CREDENTIALS_FILE="/etc/sing-box/sbox-warp-credentials.credentials"
 OUTPUT_DIR="/root/sing-box"
 ANYTLS_CLIENT_OUT="$OUTPUT_DIR/anytls-sing-box.json"
 ANYTLS_URL_FILE="$OUTPUT_DIR/anytls-url.txt"
@@ -79,8 +86,41 @@ SNELL6_INFO="$OUTPUT_DIR/snell-v6-info.txt"
 DIRECT_INFO="$OUTPUT_DIR/direct-info.txt"
 SNELL_SURGE_CONF="$OUTPUT_DIR/snell-surge.conf"
 COMBINED_INFO="$OUTPUT_DIR/all-info.txt"
-BACKUP_ROOT="${BACKUP_ROOT:-/root/sbox-reality-backups}"
+BACKUP_ROOT="/root/sbox-reality-backups"
+BACKUP_MARKER=".sbox-reality-backup"
 BBR_SYSCTL_CONF="/etc/sysctl.d/99-sbox-reality-bbr.conf"
+
+# Path overrides are accepted only by the isolated test harness. Production
+# runs always use the fixed system locations above.
+if [[ "${SBOX_REALITY_TEST_MODE:-0}" == "1" ]]; then
+  SERVER_CONF="${SERVER_CONF_OVERRIDE:-$SERVER_CONF}"
+  WARP_CREDENTIALS_FILE="${WARP_CREDENTIALS_FILE_OVERRIDE:-$WARP_CREDENTIALS_FILE}"
+  BACKUP_ROOT="${BACKUP_ROOT_OVERRIDE:-$BACKUP_ROOT}"
+  OUTPUT_DIR="${OUTPUT_DIR_OVERRIDE:-$OUTPUT_DIR}"
+  ANYTLS_CLIENT_OUT="$OUTPUT_DIR/anytls-sing-box.json"
+  ANYTLS_URL_FILE="$OUTPUT_DIR/anytls-url.txt"
+  ANYTLS_SURGE_CONF="$OUTPUT_DIR/anytls-surge.conf"
+  VLESS_CLIENT_OUT="$OUTPUT_DIR/vless-sing-box.json"
+  VLESS_URL_FILE="$OUTPUT_DIR/vless-url.txt"
+  VLESS_SURGE_CONF="$OUTPUT_DIR/vless-surge.conf"
+  HY2_CLIENT_OUT="$OUTPUT_DIR/hysteria2-sing-box.json"
+  SURGE_CONF="$OUTPUT_DIR/hysteria2-surge.conf"
+  HY2_URL_FILE="$OUTPUT_DIR/hysteria2-url.txt"
+  SNELL5_CLIENT_OUT="$OUTPUT_DIR/snell-v5-sing-box.json"
+  SNELL5_URL_FILE="$OUTPUT_DIR/snell-v5-url.txt"
+  SNELL5_SURGE_CONF="$OUTPUT_DIR/snell-v5-surge.conf"
+  SNELL6_CLIENT_OUT="$OUTPUT_DIR/snell-v6-sing-box.json"
+  SNELL6_URL_FILE="$OUTPUT_DIR/snell-v6-url.txt"
+  SNELL6_SURGE_CONF="$OUTPUT_DIR/snell-v6-surge.conf"
+  ANYTLS_INFO="$OUTPUT_DIR/anytls-info.txt"
+  VLESS_INFO="$OUTPUT_DIR/vless-info.txt"
+  HY2_INFO="$OUTPUT_DIR/hysteria2-info.txt"
+  SNELL5_INFO="$OUTPUT_DIR/snell-v5-info.txt"
+  SNELL6_INFO="$OUTPUT_DIR/snell-v6-info.txt"
+  DIRECT_INFO="$OUTPUT_DIR/direct-info.txt"
+  SNELL_SURGE_CONF="$OUTPUT_DIR/snell-surge.conf"
+  COMBINED_INFO="$OUTPUT_DIR/all-info.txt"
+fi
 
 PORT_ENV="/etc/sing-box/hy2-port-hopping.env"
 PORT_HELPER="/usr/local/bin/sing-box-hy2-port-hopping"
@@ -107,6 +147,7 @@ FIRST_HOP_PORT=""
 NORMALIZED_HOP_PORTS=""
 SERVER_PORTS_JSON=""
 SERVER_IP=""
+SERVER_URL_HOST=""
 
 ANYTLS_PRIVATE_KEY=""
 ANYTLS_PUBLIC_KEY=""
@@ -255,12 +296,45 @@ service_stop() {
   fi
 }
 
+service_is_active() {
+  if [[ "$SERVICE_MANAGER" == "systemd" ]]; then
+    systemctl is-active --quiet sing-box >/dev/null 2>&1
+  else
+    rc-service sing-box status >/dev/null 2>&1
+  fi
+}
+
+service_is_enabled() {
+  if [[ "$SERVICE_MANAGER" == "systemd" ]]; then
+    systemctl is-enabled --quiet sing-box >/dev/null 2>&1
+  else
+    rc-update show default 2>/dev/null | grep -q '^[[:space:]]*sing-box[[:space:]]'
+  fi
+}
+
+wait_for_service_active() {
+  local attempt
+
+  for attempt in {1..10}; do
+    service_is_active && return 0
+    sleep 1
+  done
+  echo "错误：sing-box 服务启动后未进入运行状态" >&2
+  if [[ "$SERVICE_MANAGER" == "systemd" ]]; then
+    systemctl status sing-box --no-pager >&2 || true
+  else
+    rc-service sing-box status >&2 || true
+  fi
+  return 1
+}
+
 service_restart() {
   if [[ "$SERVICE_MANAGER" == "systemd" ]]; then
-    systemctl restart sing-box
+    systemctl restart sing-box || return 1
   else
-    rc-service sing-box restart >/dev/null 2>&1 || rc-service sing-box start
+    rc-service sing-box restart >/dev/null 2>&1 || rc-service sing-box start || return 1
   fi
+  wait_for_service_active
 }
 
 service_disable() {
@@ -269,6 +343,19 @@ service_disable() {
   else
     rc-service sing-box stop >/dev/null 2>&1 || true
     rc-update del sing-box default >/dev/null 2>&1 || true
+  fi
+}
+
+restore_install_service_state() {
+  if (( INSTALL_SERVICE_WAS_ENABLED )); then
+    service_enable || true
+  else
+    service_disable || true
+  fi
+  if (( INSTALL_SERVICE_WAS_ACTIVE )); then
+    service_restart || true
+  else
+    service_stop
   fi
 }
 
@@ -302,6 +389,7 @@ cleanup_all_sing_box_configs() {
     /var/lib/sing-box \
     /var/log/sing-box \
     "$OUTPUT_DIR"
+  rm -f "$BBR_SYSCTL_CONF"
 }
 
 cleanup_all_sing_box_installations() {
@@ -416,10 +504,12 @@ WARP 分流选项：
 通用选项：
   -m, --mode          模式：1-9、anytls、vless、hy2、snell5、snell6、direct、full、uninstall、restore；协议可逗号多选
   -p, --port          当前单协议模式的端口；同时安装时请分别使用各协议端口选项
+      --server-host   写入客户端配置的公网 IP 或域名；无法自动检测时必填
   -h, --help          显示帮助
 
 环境变量：
   INSTALL_MODE, CONFIG_POLICY, UNINSTALL_SCOPE, PORT,
+  SERVER_HOST,
   REALITY_DOMAIN, DOMAIN, ANYTLS_PORT,
   VLESS_DOMAIN, VLESS_PORT, SNELL5_PORT, SNELL6_PORT,
   DIRECT_PORT, DIRECT_TARGET_ADDRESS, DIRECT_TARGET_PORT,
@@ -976,7 +1066,8 @@ warp_merge_config() {
 }
 
 warp_migrate_legacy_credentials() {
-  local legacy_file="$(dirname "$WARP_CREDENTIALS_FILE")/sbox-warp-credentials.json"
+  local legacy_file
+  legacy_file="$(dirname "$WARP_CREDENTIALS_FILE")/sbox-warp-credentials.json"
 
   [[ "$legacy_file" != "$WARP_CREDENTIALS_FILE" && -e "$legacy_file" ]] || return 0
   if [[ -e "$WARP_CREDENTIALS_FILE" ]]; then
@@ -1348,6 +1439,21 @@ warp_finalize_install_transaction() {
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    -m|--mode|--install|--config|\
+    -d|--domain|--reality-domain|--anytls-port|--vless-domain|--vless-port|\
+    --snell5-port|--snell6-port|--snell5-obfs|--snell6-mode|\
+    --direct-port|--direct-address|--direct-target-port|--server-host|\
+    -s|--sni|--hy2-sni|--hy2-port|-P|--ports|--port-hopping|\
+    -i|--interval|--up|--down|--obfs-type|--obfs-password|\
+    --gecko-min|--gecko-max|--cert|--key|--name|-p|--port)
+      if (( $# < 2 )) || [[ -z "${2:-}" ]]; then
+        echo "错误：选项 $1 缺少参数值" >&2
+        exit 1
+      fi
+      ;;
+  esac
+
+  case "$1" in
     -m|--mode|--install)
       INSTALL_MODE="${2:-}"
       shift 2
@@ -1390,11 +1496,13 @@ while [[ $# -gt 0 ]]; do
       ;;
     --restore)
       ACTION="restore"
+      ACTION_RESTORE_EXPLICIT=1
       CONFIG_POLICY="restore"
       shift
       ;;
     --uninstall)
       ACTION="uninstall"
+      ACTION_UNINSTALL_EXPLICIT=1
       if [[ -n "${2:-}" && "${2:-}" != -* ]]; then
         UNINSTALL_SCOPE="$2"
         shift 2
@@ -1465,6 +1573,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --direct-target-port)
       DIRECT_TARGET_PORT="${2:-}"
+      shift 2
+      ;;
+    --server-host)
+      SERVER_HOST="${2:-}"
       shift 2
       ;;
     --warp-rules)
@@ -1568,6 +1680,23 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if (( ACTION_RESTORE_EXPLICIT && ACTION_UNINSTALL_EXPLICIT )); then
+  echo "错误：--restore 不能与 --uninstall 同时使用" >&2
+  exit 1
+fi
+if [[ "$ACTION" != "install" && -n "$INSTALL_MODE" ]]; then
+  echo "错误：--mode 不能与恢复或卸载参数同时使用" >&2
+  exit 1
+fi
+if [[ "$ACTION" == "uninstall" && "$CONFIG_POLICY" != "ask" && "$CONFIG_POLICY" != "merge" ]]; then
+  echo "错误：--config $CONFIG_POLICY 不能与 --uninstall 同时使用" >&2
+  exit 1
+fi
+if [[ "$ACTION" == "restore" && "$CONFIG_POLICY" != "ask" && "$CONFIG_POLICY" != "restore" ]]; then
+  echo "错误：--config $CONFIG_POLICY 不能与 --restore 同时使用" >&2
+  exit 1
+fi
 
 warp_validate_cli || exit 1
 
@@ -1926,9 +2055,72 @@ validate_hostname() {
   done
 }
 
+validate_ipv4() {
+  local address="$1"
+  local octet
+  local -a octets
+
+  [[ "$address" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || return 1
+  IFS='.' read -r -a octets <<< "$address"
+  for octet in "${octets[@]}"; do
+    (( 10#$octet <= 255 )) || return 1
+  done
+}
+
+validate_ipv6() {
+  local address="$1"
+  local compressed=0 group
+  local -a groups
+
+  [[ "$address" == *:* && "$address" =~ ^[0-9A-Fa-f:]+$ ]] || return 1
+  [[ "$address" != *":::"* ]] || return 1
+  [[ "$address" == *::* ]] && compressed=1
+  if (( compressed )); then
+    [[ "$address" != *"::"*"::"* ]] || return 1
+  fi
+
+  address="${address#::}"
+  address="${address%::}"
+  if [[ -n "$address" ]]; then
+    IFS=':' read -r -a groups <<< "$address"
+    for group in "${groups[@]}"; do
+      [[ -z "$group" && "$compressed" == "1" ]] && continue
+      [[ "$group" =~ ^[0-9A-Fa-f]{1,4}$ ]] || return 1
+    done
+    if (( compressed )); then
+      (( ${#groups[@]} < 8 )) || return 1
+    else
+      (( ${#groups[@]} == 8 )) || return 1
+    fi
+  elif (( ! compressed )); then
+    return 1
+  fi
+}
+
+validate_server_host() {
+  local host="$1"
+  host="${host#[}"
+  host="${host%]}"
+  validate_ipv4 "$host" || validate_ipv6 "$host" || validate_hostname "$host"
+}
+
+url_host() {
+  local host="$1"
+  if [[ "$host" == *:* ]]; then
+    printf '[%s]' "$host"
+  else
+    printf '%s' "$host"
+  fi
+}
+
 is_tcp_port_in_use() {
   local port="$1"
   ss -H -lntp 2>/dev/null | awk -v p="$port" '$4 ~ ":" p "$" {print}' | grep -q .
+}
+
+is_udp_port_in_use() {
+  local port="$1"
+  ss -H -lunp 2>/dev/null | awk -v p="$port" '$4 ~ ":" p "$" {print}' | grep -q .
 }
 
 is_tcp_port_in_use_by_other() {
@@ -1977,7 +2169,7 @@ pick_random_free_high_udp_port() {
 
   for _ in $(seq 1 100); do
     candidate=$(( HIGH_PORT_MIN + $(random_number) % range ))
-    if ! is_udp_port_in_use_by_other "$candidate"; then
+    if ! is_udp_port_in_use "$candidate"; then
       echo "$candidate"
       return 0
     fi
@@ -1998,7 +2190,7 @@ pick_random_free_high_direct_port() {
 
   for _ in $(seq 1 100); do
     candidate=$(( HIGH_PORT_MIN + $(random_number) % range ))
-    if ! is_tcp_port_in_use "$candidate" && ! is_udp_port_in_use_by_other "$candidate"; then
+    if ! is_tcp_port_in_use "$candidate" && ! is_udp_port_in_use "$candidate"; then
       echo "$candidate"
       return 0
     fi
@@ -2054,6 +2246,31 @@ normalize_hop_ports() {
   FIRST_HOP_PORT="$first"
 }
 
+port_in_hop_specs() {
+  local port="$1"
+  local raw="$2"
+  local spec start end
+  local -a specs
+
+  IFS=';' read -r -a specs <<< "$raw"
+  for spec in "${specs[@]}"; do
+    if [[ "$spec" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+      start="${BASH_REMATCH[1]}"
+      end="${BASH_REMATCH[2]}"
+      (( port >= start && port <= end )) && return 0
+    elif [[ "$spec" == "$port" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+json_escape() {
+  local encoded
+  encoded="$(jq -Rn --arg value "$1" '$value')" || return 1
+  printf '%s' "${encoded:1:${#encoded}-2}"
+}
+
 build_server_ports_json() {
   local -a specs
   local spec sep json
@@ -2088,14 +2305,14 @@ json_obfs_field() {
     cat << JSON
       "obfs": {
         "type": "gecko",
-        "password": "${OBFS_PASSWORD}"$(if [[ "$GECKO_MIN_PACKET_SIZE" != "512" ]]; then printf ',\n        "min_packet_size": %s' "$GECKO_MIN_PACKET_SIZE"; fi)$(if [[ "$GECKO_MAX_PACKET_SIZE" != "1200" ]]; then printf ',\n        "max_packet_size": %s' "$GECKO_MAX_PACKET_SIZE"; fi)
+        "password": "$(json_escape "$OBFS_PASSWORD")"$(if [[ "$GECKO_MIN_PACKET_SIZE" != "512" ]]; then printf ',\n        "min_packet_size": %s' "$GECKO_MIN_PACKET_SIZE"; fi)$(if [[ "$GECKO_MAX_PACKET_SIZE" != "1200" ]]; then printf ',\n        "max_packet_size": %s' "$GECKO_MAX_PACKET_SIZE"; fi)
       },
 JSON
   else
     cat << JSON
       "obfs": {
         "type": "salamander",
-        "password": "${OBFS_PASSWORD}"
+        "password": "$(json_escape "$OBFS_PASSWORD")"
       },
 JSON
   fi
@@ -2124,11 +2341,20 @@ json_snell6_mode_field() {
   printf ',\n      "mode": "%s"' "$SNELL6_MODE"
 }
 
+surge_escape() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//$'\r'/}"
+  value="${value//$'\n'/}"
+  printf '%s' "$value"
+}
+
 surge_obfs_param() {
   if [[ "$OBFS" == "gecko" ]]; then
-    printf ',gecko-password="%s"' "$OBFS_PASSWORD"
+    printf ',gecko-password="%s"' "$(surge_escape "$OBFS_PASSWORD")"
   elif [[ "$OBFS" == "salamander" ]]; then
-    printf ',salamander-password="%s"' "$OBFS_PASSWORD"
+    printf ',salamander-password="%s"' "$(surge_escape "$OBFS_PASSWORD")"
   fi
 }
 
@@ -2149,11 +2375,11 @@ surge_extra_params() {
 build_surge_proxy_line() {
   if [[ "$HY2_PORT_HOPPING" == "on" ]]; then
     printf '%s=hysteria2,%s,%s,password="%s",port-hopping="%s"%s,sni="%s",skip-cert-verify=true,tfo=false%s' \
-      "$PROXY_NAME" "$SERVER_IP" "$HY2_PORT" "$HY2_PASSWORD" \
+      "$PROXY_NAME" "$SERVER_URL_HOST" "$HY2_PORT" "$HY2_PASSWORD" \
       "$NORMALIZED_HOP_PORTS" "$(surge_obfs_param)" "$HY2_SNI" "$(surge_extra_params)"
   else
     printf '%s=hysteria2,%s,%s,password="%s"%s,sni="%s",skip-cert-verify=true,tfo=false%s' \
-      "$PROXY_NAME" "$SERVER_IP" "$HY2_PORT" "$HY2_PASSWORD" \
+      "$PROXY_NAME" "$SERVER_URL_HOST" "$HY2_PORT" "$HY2_PASSWORD" \
       "$(surge_obfs_param)" "$HY2_SNI" "$(surge_extra_params)"
   fi
 }
@@ -2189,7 +2415,7 @@ build_hy2_share_url() {
     query="${query}&obfs=${OBFS}&obfs-password=$(url_encode "$OBFS_PASSWORD")"
   fi
 
-  HY2_SHARE_URL="hysteria2://$(url_encode "$HY2_PASSWORD")@${SERVER_IP}:${uri_ports}/?${query}#$(url_encode "$PROXY_NAME")"
+  HY2_SHARE_URL="hysteria2://$(url_encode "$HY2_PASSWORD")@${SERVER_URL_HOST}:${uri_ports}/?${query}#$(url_encode "$PROXY_NAME")"
 }
 
 build_vless_share_url() {
@@ -2200,22 +2426,22 @@ build_vless_share_url() {
   query="${query}&pbk=$(url_encode "$VLESS_PUBLIC_KEY")&sid=$(url_encode "$VLESS_SHORT_ID")"
   query="${query}&type=tcp&headerType=none"
 
-  VLESS_SHARE_URL="vless://${VLESS_UUID}@${SERVER_IP}:${VLESS_PORT}?${query}#VLESS-Reality"
+  VLESS_SHARE_URL="vless://${VLESS_UUID}@${SERVER_URL_HOST}:${VLESS_PORT}?${query}#VLESS-Reality"
 }
 
 build_anytls_share_url() {
   local query
   query="security=reality&sni=$(url_encode "$REALITY_DOMAIN")&fp=chrome"
   query="${query}&pbk=$(url_encode "$ANYTLS_PUBLIC_KEY")&sid=$(url_encode "$ANYTLS_SHORT_ID")"
-  ANYTLS_SHARE_URL="anytls://$(url_encode "$ANYTLS_PASSWORD")@${SERVER_IP}:${ANYTLS_PORT}?${query}#AnyTLS-Reality"
+  ANYTLS_SHARE_URL="anytls://$(url_encode "$ANYTLS_PASSWORD")@${SERVER_URL_HOST}:${ANYTLS_PORT}?${query}#AnyTLS-Reality"
 }
 
 build_snell_share_urls() {
   if (( INSTALL_SNELL5 )); then
-    SNELL5_SHARE_URL="snell://$(url_encode "$SNELL5_PSK")@${SERVER_IP}:${SNELL5_PORT}?version=5&obfs=${SNELL5_OBFS_MODE}&tfo=true&reuse=true#Snell-v5"
+    SNELL5_SHARE_URL="snell://$(url_encode "$SNELL5_PSK")@${SERVER_URL_HOST}:${SNELL5_PORT}?version=5&obfs=${SNELL5_OBFS_MODE}&tfo=true&reuse=true#Snell-v5"
   fi
   if (( INSTALL_SNELL6 )); then
-    SNELL6_SHARE_URL="snell://$(url_encode "$SNELL6_PSK")@${SERVER_IP}:${SNELL6_PORT}?version=6&mode=${SNELL6_MODE}&tfo=true&reuse=true#Snell-v6"
+    SNELL6_SHARE_URL="snell://$(url_encode "$SNELL6_PSK")@${SERVER_URL_HOST}:${SNELL6_PORT}?version=6&mode=${SNELL6_MODE}&tfo=true&reuse=true#Snell-v6"
   fi
 }
 
@@ -2412,6 +2638,134 @@ disable_hy2_port_hopping() {
   rm -f "$SYSTEMD_DROPIN" "$OPENRC_PORT_SERVICE" "$PORT_ENV"
 }
 
+begin_install_transaction() {
+  local path exists kind index snapshot_dir
+  local -a paths=(
+    "$SERVER_CONF"
+    "$WARP_CREDENTIALS_FILE"
+    "$PORT_ENV"
+    "$PORT_HELPER"
+    "$SYSTEMD_DROPIN"
+    "$OPENRC_PORT_SERVICE"
+    "$CERT_PATH"
+    "$KEY_PATH"
+    "$OUTPUT_DIR"
+  )
+
+  (( INSTALL_TRANSACTION_ACTIVE )) && return 0
+  [[ -d "$(dirname "$SERVER_CONF")" ]] || mkdir -p "$(dirname "$SERVER_CONF")"
+  snapshot_dir="$(mktemp -d "$(dirname "$SERVER_CONF")/.sbox-install-tx.XXXXXX")" || {
+    echo "错误：无法创建安装事务快照目录" >&2
+    return 1
+  }
+  mkdir -p "$snapshot_dir/data" || return 1
+
+  INSTALL_SERVICE_WAS_ACTIVE=0
+  INSTALL_SERVICE_WAS_ENABLED=0
+  service_is_active && INSTALL_SERVICE_WAS_ACTIVE=1
+  service_is_enabled && INSTALL_SERVICE_WAS_ENABLED=1
+
+  for index in "${!paths[@]}"; do
+    path="${paths[$index]}"
+    printf '%s' "$path" > "$snapshot_dir/path.$index" || return 1
+    exists=0
+    if [[ -e "$path" || -L "$path" ]]; then
+      exists=1
+      if [[ -L "$path" ]]; then
+        kind="symlink"
+      elif [[ -d "$path" ]]; then
+        kind="directory"
+      else
+        kind="file"
+      fi
+      cp -a -- "$path" "$snapshot_dir/data/$index" || return 1
+    else
+      kind="missing"
+    fi
+    printf '%s' "$exists" > "$snapshot_dir/existed.$index" || return 1
+    printf '%s' "$kind" > "$snapshot_dir/kind.$index" || return 1
+  done
+
+  INSTALL_TRANSACTION_DIR="$snapshot_dir"
+  INSTALL_TRANSACTION_ACTIVE=1
+  trap 'install_transaction_on_exit' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+}
+
+restore_install_transaction_entry() {
+  local snapshot_dir="$1"
+  local index="$2"
+  local path existed kind
+
+  path="$(cat "$snapshot_dir/path.$index")" || return 1
+  existed="$(cat "$snapshot_dir/existed.$index")" || return 1
+  kind="$(cat "$snapshot_dir/kind.$index")" || return 1
+  [[ -n "$path" ]] || return 1
+
+  if [[ -L "$path" || -f "$path" ]]; then
+    rm -f -- "$path" || return 1
+  elif [[ -d "$path" ]]; then
+    rm -rf -- "$path" || return 1
+  fi
+
+  if [[ "$existed" == "1" ]]; then
+    mkdir -p "$(dirname "$path")" || return 1
+    cp -a -- "$snapshot_dir/data/$index" "$path" || return 1
+  elif [[ "$kind" != "missing" ]]; then
+    return 1
+  fi
+}
+
+rollback_install_transaction() {
+  local index
+
+  (( INSTALL_TRANSACTION_ACTIVE )) || return 0
+  [[ -n "$INSTALL_TRANSACTION_DIR" && -d "$INSTALL_TRANSACTION_DIR" ]] || return 1
+  trap - EXIT INT TERM
+
+  for index in {0..8}; do
+    if ! restore_install_transaction_entry "$INSTALL_TRANSACTION_DIR" "$index"; then
+      echo "错误：安装回滚不完整，恢复快照保留在 $INSTALL_TRANSACTION_DIR" >&2
+      return 1
+    fi
+  done
+
+  if ! rm -rf -- "$INSTALL_TRANSACTION_DIR"; then
+    echo "错误：已恢复文件，但无法删除安装事务目录：$INSTALL_TRANSACTION_DIR" >&2
+    return 1
+  fi
+  INSTALL_TRANSACTION_DIR=""
+  INSTALL_TRANSACTION_ACTIVE=0
+}
+
+finalize_install_transaction() {
+  (( INSTALL_TRANSACTION_ACTIVE )) || return 0
+  trap - EXIT INT TERM
+  if ! rm -rf -- "$INSTALL_TRANSACTION_DIR"; then
+    echo "错误：无法清理安装事务目录：$INSTALL_TRANSACTION_DIR" >&2
+    return 1
+  fi
+  INSTALL_TRANSACTION_DIR=""
+  INSTALL_TRANSACTION_ACTIVE=0
+}
+
+install_transaction_on_exit() {
+  local status="$?"
+  trap - EXIT INT TERM
+  if (( INSTALL_TRANSACTION_ACTIVE )); then
+    echo "安装未完成，正在恢复安装前状态……" >&2
+    if rollback_install_transaction; then
+      service_reload || true
+      restore_install_service_state
+    fi
+    if (( WARP_INSTALL_ACTIVE )); then
+      warp_finalize_install_transaction || true
+    fi
+  fi
+  exit "$status"
+}
+
 backup_existing_files() {
   local reason="$1"
   local backup_dir source copied=0
@@ -2458,6 +2812,11 @@ backup_existing_files() {
     echo "错误：无法创建安全的备份目录：$backup_dir" >&2
     return 1
   fi
+  if ! : > "$backup_dir/$BACKUP_MARKER" || ! chmod 600 "$backup_dir/$BACKUP_MARKER"; then
+    echo "错误：无法写入备份目录安全标记：$backup_dir" >&2
+    rmdir "$backup_dir" 2>/dev/null || true
+    return 1
+  fi
 
   for source in "${sources[@]}"; do
     if [[ -f "$source" ]]; then
@@ -2480,6 +2839,7 @@ backup_existing_files() {
   done
 
   if (( copied == 0 )); then
+    rm -f "$backup_dir/$BACKUP_MARKER"
     rmdir "$backup_dir" 2>/dev/null || true
     LAST_BACKUP_DIR=""
     echo "未发现现有配置文件，因此没有创建空备份。"
@@ -2492,12 +2852,23 @@ backup_existing_files() {
 
 prune_backups_except() {
   local keep_dir="$1"
-  local candidate
+  local candidate backup_root_real expected_root
 
   [[ -n "$keep_dir" && -d "$keep_dir" && -d "$BACKUP_ROOT" ]] || return 0
+  backup_root_real="$(cd "$BACKUP_ROOT" && pwd -P)" || return 1
+  expected_root="/root/sbox-reality-backups"
+
+  if [[ "$backup_root_real" != "$expected_root" ]] \
+    && [[ "${SBOX_REALITY_TEST_MODE:-0}" != "1" ]]; then
+    echo "错误：拒绝清理非默认备份目录：$backup_root_real" >&2
+    return 1
+  fi
 
   for candidate in "$BACKUP_ROOT"/*; do
-    [[ -d "$candidate" && "$candidate" != "$keep_dir" ]] || continue
+    [[ -d "$candidate" && ! -L "$candidate" && "$candidate" != "$keep_dir" ]] || continue
+    [[ "$candidate" == "$BACKUP_ROOT"/* ]] || continue
+    # Never delete directories that were not created by this installer.
+    [[ -f "$candidate/$BACKUP_MARKER" ]] || continue
     rm -rf -- "$candidate"
   done
 }
@@ -2659,19 +3030,24 @@ restore_latest_backup() {
   }
   backup_config="${LATEST_BACKUP_DIR}/$(basename "$SERVER_CONF")"
 
-  if [[ -s "$SERVER_CONF" ]]; then
-    backup_existing_files "before-restore"
-  fi
-
   echo "正在从以下位置恢复配置：$LATEST_BACKUP_DIR"
   echo "所选安装模式和新协议选项不会生效。"
-  install_dependencies
+  install_base_dependencies
 
   if ! jq -e . "$backup_config" >/dev/null; then
     echo "错误：备份配置不是有效的 JSON：$backup_config"
     exit 1
   fi
   validate_backup_tls_files "$LATEST_BACKUP_DIR" "$backup_config"
+
+  if [[ -s "$SERVER_CONF" ]]; then
+    backup_existing_files "before-restore"
+  fi
+  if ! begin_install_transaction; then
+    echo "错误：无法建立恢复事务"
+    exit 1
+  fi
+  install_sing_box
 
   service_stop
   disable_hy2_port_hopping
@@ -2695,13 +3071,14 @@ restore_latest_backup() {
 
   if ! run_sing_box check -c "$SERVER_CONF"; then
     echo "错误：文件已恢复，但未通过 sing-box 配置验证"
-    echo "服务已保持停止状态。备份位置：$LATEST_BACKUP_DIR"
+    echo "正在回滚到恢复前状态。备份位置：$LATEST_BACKUP_DIR"
     exit 1
   fi
 
   service_reload
   service_enable
   service_restart
+  finalize_install_transaction
 
   echo
   echo "备份恢复完成。"
@@ -2966,7 +3343,159 @@ uninstall_selected() {
   fi
 }
 
+is_selected_inbound_tag() {
+  case "$1" in
+    anytls-in) (( INSTALL_ANYTLS )) ;;
+    vless-in) (( INSTALL_VLESS )) ;;
+    hy2-in) (( INSTALL_HY2 )) ;;
+    snell5-in) (( INSTALL_SNELL5 )) ;;
+    snell6-in) (( INSTALL_SNELL6 )) ;;
+    direct-in) (( INSTALL_DIRECT )) ;;
+    *) return 1 ;;
+  esac
+}
+
+inbound_transports() {
+  local type="$1"
+  local network="$2"
+
+  case "$network" in
+    tcp) printf 'tcp' ;;
+    udp) printf 'udp' ;;
+    tcp,udp|udp,tcp) printf 'tcp udp' ;;
+    *)
+      case "$type" in
+        anytls|vless|vmess|trojan|snell|http)
+          printf 'tcp'
+          ;;
+        hysteria2|tuic)
+          printf 'udp'
+          ;;
+        *)
+          # Unknown inbound types are treated conservatively.
+          printf 'tcp udp'
+          ;;
+      esac
+      ;;
+  esac
+}
+
+validate_planned_port_against_existing_config() {
+  local transport="$1"
+  local port="$2"
+  local label="$3"
+  local tag type network existing_port transports
+  local -A existing_tcp=()
+  local -A existing_udp=()
+
+  [[ "$CONFIG_POLICY" == "merge" && -s "$SERVER_CONF" ]] || return 0
+
+  while IFS=$'\x1f' read -r tag type network existing_port; do
+    [[ "$existing_port" =~ ^[0-9]+$ ]] || continue
+    is_selected_inbound_tag "$tag" && continue
+    transports="$(inbound_transports "$type" "$network")"
+    if [[ " $transports " == *" tcp "* ]]; then
+      existing_tcp["$existing_port"]+="${tag:-unnamed} "
+    fi
+    if [[ " $transports " == *" udp "* ]]; then
+      existing_udp["$existing_port"]+="${tag:-unnamed} "
+    fi
+  done < <(
+    jq -r '
+      .inbounds[]?
+      | select(.listen_port != null)
+      | [
+          (.tag // ""),
+          (.type // ""),
+          (.network // ""),
+          (.listen_port | tostring)
+        ]
+      | join("\u001f")
+    ' "$SERVER_CONF"
+  )
+
+  case "$transport" in
+    tcp)
+      if [[ -n "${existing_tcp[$port]:-}" ]]; then
+        echo "错误：$label 端口 $port/TCP 已被现有入站占用：${existing_tcp[$port]}" >&2
+        return 1
+      fi
+      ;;
+    udp)
+      if [[ -n "${existing_udp[$port]:-}" ]]; then
+        echo "错误：$label 端口 $port/UDP 已被现有入站占用：${existing_udp[$port]}" >&2
+        return 1
+      fi
+      ;;
+    both)
+      if [[ -n "${existing_tcp[$port]:-}" || -n "${existing_udp[$port]:-}" ]]; then
+        echo "错误：$label 端口 $port 已被现有入站占用：${existing_tcp[$port]:-}${existing_udp[$port]:-}" >&2
+        return 1
+      fi
+      ;;
+  esac
+}
+
+validate_udp_range_against_existing_config() {
+  local raw="$1"
+  local label="$2"
+  local spec start end port
+  local -a specs
+  local -A existing_udp=()
+  local tag type network listen_port transports
+
+  [[ "$CONFIG_POLICY" == "merge" && -s "$SERVER_CONF" ]] || return 0
+
+  while IFS=$'\x1f' read -r tag type network listen_port; do
+    [[ "$listen_port" =~ ^[0-9]+$ ]] || continue
+    is_selected_inbound_tag "$tag" && continue
+    transports="$(inbound_transports "$type" "$network")"
+    if [[ " $transports " == *" udp "* ]]; then
+      existing_udp["$listen_port"]="${tag:-unnamed}"
+    fi
+  done < <(
+    jq -r '
+      .inbounds[]?
+      | select(.listen_port != null)
+      | [(.tag // ""), (.type // ""), (.network // ""), (.listen_port | tostring)]
+      | join("\u001f")
+    ' "$SERVER_CONF"
+  )
+
+  IFS=';' read -r -a specs <<< "$raw"
+  for spec in "${specs[@]}"; do
+    if [[ "$spec" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+      start="${BASH_REMATCH[1]}"
+      end="${BASH_REMATCH[2]}"
+      for port in "${!existing_udp[@]}"; do
+        if (( port >= start && port <= end )); then
+          echo "错误：$label 端口跳跃范围 $spec 包含现有入站 ${existing_udp[$port]} 的 UDP 端口 $port" >&2
+          return 1
+        fi
+      done
+    else
+      if [[ -n "${existing_udp[$spec]:-}" ]]; then
+        echo "错误：$label 端口 $spec/UDP 已被现有入站 ${existing_udp[$spec]} 占用" >&2
+        return 1
+      fi
+    fi
+  done
+}
+
+validate_planned_ports_against_existing_config() {
+  (( INSTALL_ANYTLS )) && validate_planned_port_against_existing_config tcp "$ANYTLS_PORT" "AnyTLS"
+  (( INSTALL_VLESS )) && validate_planned_port_against_existing_config tcp "$VLESS_PORT" "VLESS"
+  (( INSTALL_SNELL5 )) && validate_planned_port_against_existing_config tcp "$SNELL5_PORT" "Snell v5"
+  (( INSTALL_SNELL6 )) && validate_planned_port_against_existing_config tcp "$SNELL6_PORT" "Snell v6"
+  (( INSTALL_HY2 )) && validate_planned_port_against_existing_config udp "$HY2_PORT" "Hysteria2"
+  (( INSTALL_DIRECT )) && validate_planned_port_against_existing_config both "$DIRECT_PORT" "Direct"
+  if (( INSTALL_HY2 )) && [[ "$HY2_PORT_HOPPING" == "on" ]]; then
+    validate_udp_range_against_existing_config "$NORMALIZED_HOP_PORTS" "Hysteria2"
+  fi
+}
+
 prepare_inputs() {
+  ensure_port_tools || exit 1
   REALITY_DOMAIN="$(strip_host "$REALITY_DOMAIN")"
   VLESS_DOMAIN="$(strip_host "$VLESS_DOMAIN")"
   HY2_SNI="$(strip_host "$HY2_SNI")"
@@ -3137,6 +3666,15 @@ prepare_inputs() {
       echo "错误：OBFS 只能设置为 gecko、salamander 或 off"
       exit 1
     fi
+    if [[ "$OBFS_PASSWORD" == *$'\n'* || "$OBFS_PASSWORD" == *$'\r'* ]]; then
+      echo "错误：混淆密码不能包含换行符"
+      exit 1
+    fi
+    if [[ "$CERT_PATH" == *$'\n'* || "$CERT_PATH" == *$'\r'* \
+      || "$KEY_PATH" == *$'\n'* || "$KEY_PATH" == *$'\r'* ]]; then
+      echo "错误：证书和私钥路径不能包含换行符"
+      exit 1
+    fi
 
     if [[ "$OBFS" == "gecko" ]]; then
       if ! validate_positive_number "$GECKO_MIN_PACKET_SIZE" \
@@ -3172,7 +3710,7 @@ prepare_inputs() {
 
     if [[ -z "$DIRECT_PORT" || "$DIRECT_PORT" == "auto" || "$DIRECT_PORT" == "random" ]]; then
       DIRECT_PORT="$(pick_random_free_high_direct_port)"
-      while { (( INSTALL_HY2 )) && [[ "$DIRECT_PORT" == "$HY2_PORT" ]]; } \
+      while { (( INSTALL_HY2 )) && port_in_hop_specs "$DIRECT_PORT" "$NORMALIZED_HOP_PORTS"; } \
         || { (( INSTALL_ANYTLS )) && [[ "$DIRECT_PORT" == "$ANYTLS_PORT" ]]; } \
         || { (( INSTALL_VLESS )) && [[ "$DIRECT_PORT" == "$VLESS_PORT" ]]; } \
         || { (( INSTALL_SNELL5 )) && [[ "$DIRECT_PORT" == "$SNELL5_PORT" ]]; } \
@@ -3187,7 +3725,7 @@ prepare_inputs() {
       exit 1
     fi
 
-    if { (( INSTALL_HY2 )) && [[ "$DIRECT_PORT" == "$HY2_PORT" ]]; } \
+    if { (( INSTALL_HY2 )) && port_in_hop_specs "$DIRECT_PORT" "$NORMALIZED_HOP_PORTS"; } \
       || { (( INSTALL_ANYTLS )) && [[ "$DIRECT_PORT" == "$ANYTLS_PORT" ]]; } \
       || { (( INSTALL_VLESS )) && [[ "$DIRECT_PORT" == "$VLESS_PORT" ]]; } \
       || { (( INSTALL_SNELL5 )) && [[ "$DIRECT_PORT" == "$SNELL5_PORT" ]]; } \
@@ -3206,6 +3744,9 @@ prepare_inputs() {
       exit 1
     fi
   fi
+
+  validate_planned_ports_against_existing_config
+  detect_server_ip
 }
 
 fetch_preferred_sing_box_version() {
@@ -3424,10 +3965,8 @@ install_sing_box_alpine() {
   rm -rf "$tmpdir"
 }
 
-install_dependencies() {
-  local release_version attempt installed=0
-
-  echo "正在安装依赖……"
+install_base_dependencies() {
+  echo "正在安装基础依赖……"
   if [[ "$PLATFORM" == "alpine" ]]; then
     apk add --no-cache bash curl git openssl ca-certificates iproute2 coreutils jq nftables iptables openrc
   else
@@ -3437,6 +3976,22 @@ install_dependencies() {
       -o Dpkg::Options::="--force-confold" \
       curl git openssl ca-certificates iproute2 coreutils jq nftables iptables procps
   fi
+}
+
+ensure_port_tools() {
+  local command_name
+
+  for command_name in ss awk grep; do
+    if ! command -v "$command_name" >/dev/null 2>&1; then
+      echo "错误：缺少端口检测命令 $command_name；请先安装 iproute2 和基础系统工具" >&2
+      return 1
+    fi
+  done
+}
+
+install_sing_box() {
+  local release_version attempt installed=0
+
   if ! release_version="$(fetch_preferred_sing_box_version)"; then
     echo "错误：获取 sing-box 最新 Alpha 版本失败"
     exit 1
@@ -3464,6 +4019,11 @@ install_dependencies() {
     exit 1
   fi
   mkdir -p /etc/sing-box
+}
+
+install_dependencies() {
+  install_base_dependencies
+  install_sing_box
 }
 
 generate_anytls_secrets() {
@@ -3620,8 +4180,8 @@ $(json_number_field "up_mbps" "$UP_MBPS")$(json_number_field "down_mbps" "$DOWN_
       ],
       "tls": {
         "enabled": true,
-        "certificate_path": "${CERT_PATH}",
-        "key_path": "${KEY_PATH}"
+        "certificate_path": "$(json_escape "$CERT_PATH")",
+        "key_path": "$(json_escape "$KEY_PATH")"
       }
     }
 JSON
@@ -3855,36 +4415,67 @@ write_server_config() {
     return 1
   fi
 
+  if ! begin_install_transaction; then
+    rm -f "$temp_config" "$warp_config"
+    return 1
+  fi
+
   if (( WARP_INSTALL_ACTIVE )); then
-    if ! warp_begin_install_transaction; then
-      rm -f "$temp_config" "$warp_config"
-      return 1
-    fi
-    if ! chmod 600 "$final_config" "$WARP_STAGED_CREDENTIALS"; then
-      warp_rollback_install_transaction || true
-      rm -f "$temp_config" "$warp_config"
-      return 1
-    fi
-    if ! mv -f "$final_config" "$SERVER_CONF" \
+    if ! chmod 600 "$final_config" "$WARP_STAGED_CREDENTIALS" \
+      || ! mv -f "$final_config" "$SERVER_CONF" \
       || ! mv -f "$WARP_STAGED_CREDENTIALS" "$WARP_CREDENTIALS_FILE"; then
-      warp_rollback_install_transaction || true
+      rollback_install_transaction || true
+      warp_finalize_install_transaction || true
       rm -f "$temp_config" "$warp_config"
       return 1
     fi
-  else
-    if ! chmod 600 "$final_config" || ! mv -f "$final_config" "$SERVER_CONF"; then
-      rm -f "$temp_config" "$warp_config"
-      return 1
-    fi
+  elif ! chmod 600 "$final_config" || ! mv -f "$final_config" "$SERVER_CONF"; then
+    rollback_install_transaction || true
+    rm -f "$temp_config" "$warp_config"
+    return 1
   fi
   rm -f "$temp_config" "$warp_config"
 }
 
 detect_server_ip() {
-  SERVER_IP="$(curl -4 -s --max-time 8 https://api.ipify.org || true)"
-  if [[ -z "$SERVER_IP" ]]; then
-    SERVER_IP="your_vps_ip_or_domain"
+  local candidate answer
+
+  if [[ -n "$SERVER_HOST" ]]; then
+    if ! validate_server_host "$SERVER_HOST"; then
+      echo "错误：--server-host 必须是有效的 IP 地址或域名：$SERVER_HOST" >&2
+      return 1
+    fi
+    SERVER_IP="${SERVER_HOST#[}"
+    SERVER_IP="${SERVER_IP%]}"
+  else
+    for candidate in \
+      "$(curl -4 -fsS --connect-timeout 5 --max-time 8 https://api.ipify.org 2>/dev/null || true)" \
+      "$(curl -6 -fsS --connect-timeout 5 --max-time 8 https://api.ipify.org 2>/dev/null || true)"; do
+      if [[ -n "$candidate" ]] && validate_server_host "$candidate"; then
+        SERVER_IP="$candidate"
+        break
+      fi
+    done
   fi
+
+  if [[ -z "$SERVER_IP" ]]; then
+    if [[ -t 0 ]]; then
+      while true; do
+        read -rp "无法自动获取公网地址，请输入 VPS 公网 IP 或域名：" answer
+        if validate_server_host "$answer"; then
+          SERVER_IP="${answer#[}"
+          SERVER_IP="${SERVER_IP%]}"
+          break
+        fi
+        echo "错误：请输入有效的 IP 地址或域名"
+      done
+    else
+      echo "错误：无法自动获取公网地址；非交互安装请使用 --server-host 指定" >&2
+      return 1
+    fi
+  fi
+
+  SERVER_URL_HOST="$(url_host "$SERVER_IP")"
 }
 
 run_install_after_config_steps() {
@@ -3898,8 +4489,6 @@ run_install_after_config_steps() {
     disable_hy2_port_hopping || return 1
   fi
 
-  detect_server_ip || return 1
-
   if (( INSTALL_ANYTLS )); then
     write_anytls_client || return 1
   fi
@@ -3912,6 +4501,21 @@ run_install_after_config_steps() {
   if (( INSTALL_SNELL5 || INSTALL_SNELL6 )); then
     write_snell_clients || return 1
   fi
+  if (( INSTALL_ANYTLS )) && ! run_sing_box check -c "$ANYTLS_CLIENT_OUT"; then
+    return 1
+  fi
+  if (( INSTALL_VLESS )) && ! run_sing_box check -c "$VLESS_CLIENT_OUT"; then
+    return 1
+  fi
+  if (( INSTALL_HY2 )) && ! run_sing_box check -c "$HY2_CLIENT_OUT"; then
+    return 1
+  fi
+  if (( INSTALL_SNELL5 )) && ! run_sing_box check -c "$SNELL5_CLIENT_OUT"; then
+    return 1
+  fi
+  if (( INSTALL_SNELL6 )) && ! run_sing_box check -c "$SNELL6_CLIENT_OUT"; then
+    return 1
+  fi
 
   service_reload || return 1
   service_enable || return 1
@@ -3922,6 +4526,7 @@ complete_install_after_config() {
   local status
 
   if run_install_after_config_steps; then
+    finalize_install_transaction || return 1
     if (( WARP_INSTALL_ACTIVE )); then
       warp_finalize_install_transaction || return 1
     fi
@@ -3930,12 +4535,14 @@ complete_install_after_config() {
     status=$?
   fi
 
+  echo "错误：安装完成阶段失败，正在恢复安装前状态" >&2
+  if ! rollback_install_transaction; then
+    return 1
+  fi
+  service_reload || true
+  restore_install_service_state
   if (( WARP_INSTALL_ACTIVE )); then
-    echo "错误：安装完成阶段失败，正在恢复 WARP 修改前的文件" >&2
-    if ! warp_rollback_install_transaction; then
-      return 1
-    fi
-    service_restart || true
+    warp_finalize_install_transaction || true
   fi
   return "$status"
 }
@@ -4087,13 +4694,13 @@ JSON
   fi
 
   if (( INSTALL_SNELL5 )); then
-    SNELL5_SURGE_LINE="SnellV5=snell,${SERVER_IP},${SNELL5_PORT},psk=\"${SNELL5_PSK}\",version=5,tfo=true,reuse=true"
+    SNELL5_SURGE_LINE="SnellV5=snell,${SERVER_URL_HOST},${SNELL5_PORT},psk=\"${SNELL5_PSK}\",version=5,tfo=true,reuse=true"
   elif [[ -f "$SNELL5_INFO" ]]; then
     SNELL5_SURGE_LINE="$(sed -n '/^SnellV5=snell,/p' "$SNELL5_INFO" | head -n 1)"
   fi
 
   if (( INSTALL_SNELL6 )); then
-    SNELL6_SURGE_LINE="SnellV6=snell,${SERVER_IP},${SNELL6_PORT},psk=\"${SNELL6_PSK}\",version=6,mode=${SNELL6_MODE},tfo=true,reuse=true"
+    SNELL6_SURGE_LINE="SnellV6=snell,${SERVER_URL_HOST},${SNELL6_PORT},psk=\"${SNELL6_PSK}\",version=6,mode=${SNELL6_MODE},tfo=true,reuse=true"
   elif [[ -f "$SNELL6_INFO" ]]; then
     SNELL6_SURGE_LINE="$(sed -n '/^SnellV6=snell,/p' "$SNELL6_INFO" | head -n 1)"
   fi
@@ -4482,9 +5089,7 @@ main() {
   resolve_sing_box_binary || true
 
   if [[ "$ACTION" == "warp" ]]; then
-    if ! command -v jq >/dev/null 2>&1; then
-      install_jq
-    fi
+    install_base_dependencies
     if [[ -z "$SING_BOX_BIN" ]] && ! resolve_sing_box_binary; then
       echo "错误：独立配置 WARP 前需要已安装 sing-box" >&2
       return 1
@@ -4517,6 +5122,8 @@ main() {
     return 0
   fi
 
+  install_base_dependencies
+  validate_existing_server_config
   choose_install_ports
   prepare_inputs
   if [[ -t 0 ]] && (( ! WARP_RULES_EXPLICIT && ! WARP_RESET )); then
@@ -4572,8 +5179,7 @@ main() {
     backup_existing_files "before-new-config"
   fi
 
-  install_dependencies
-  validate_existing_server_config
+  install_sing_box
   warp_prepare_install_state
   enable_bbr_and_fq
   verify_snell_support
