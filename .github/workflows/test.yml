@@ -54,21 +54,24 @@ jobs:
             .assets[] | select(.name == $name) | .digest // empty
           ' <<< "$release_json")"
           test -n "$digest"
+          download_url="$(jq -r --arg name "$asset_name" '
+            .assets[] | select(.name == $name) | .browser_download_url // empty
+          ' <<< "$release_json")"
+          test -n "$download_url"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "asset_name=${asset_name}" >> "$GITHUB_OUTPUT"
           echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+          echo "download_url=${download_url}" >> "$GITHUB_OUTPUT"
           echo "Selected $version ($asset_name)"
 
       - name: Download and verify sing-box Alpha
         env:
-          VERSION: ${{ steps.alpha.outputs.version }}
-          ASSET_NAME: ${{ steps.alpha.outputs.asset_name }}
           DIGEST: ${{ steps.alpha.outputs.digest }}
+          DOWNLOAD_URL: ${{ steps.alpha.outputs.download_url }}
         run: |
           set -euo pipefail
-          curl -fL --retry 3 \
-            "https://github.com/SagerNet/sing-box/releases/download/${VERSION}/${ASSET_NAME}" \
-            -o /tmp/sing-box.tar.gz
+          curl -fL --retry 3 --retry-all-errors --retry-delay 2 \
+            "$DOWNLOAD_URL" -o /tmp/sing-box.tar.gz
           echo "${DIGEST#sha256:}  /tmp/sing-box.tar.gz" | sha256sum -c -
           tar -xzf /tmp/sing-box.tar.gz -C /tmp
           binary="$(find /tmp -type f -name sing-box -perm -111 | head -n 1)"
