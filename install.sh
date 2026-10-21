@@ -15,6 +15,13 @@ WARP_RULES_JSON="[]"
 WARP_RULES_EXPLICIT=0
 WARP_OFF=0
 WARP_RESET=0
+WARP_INSTALL_ACTIVE=0
+WARP_INSTALL_RULES_JSON="[]"
+WARP_STAGED_CREDENTIALS=""
+WARP_INSTALL_STAGE_DIR=""
+WARP_INSTALL_SNAPSHOT_DIR=""
+WARP_INSTALL_CONFIG_EXISTED=0
+WARP_INSTALL_CREDENTIALS_EXISTED=0
 
 [[ -n "${HY2_PORT_HOPPING+x}" ]] && HY2_PORT_HOPPING_EXPLICIT=1
 [[ -n "${HOP_PORTS+x}" ]] && HOP_PORTS_EXPLICIT=1
@@ -72,7 +79,7 @@ SNELL6_INFO="$OUTPUT_DIR/snell-v6-info.txt"
 DIRECT_INFO="$OUTPUT_DIR/direct-info.txt"
 SNELL_SURGE_CONF="$OUTPUT_DIR/snell-surge.conf"
 COMBINED_INFO="$OUTPUT_DIR/all-info.txt"
-BACKUP_ROOT="/root/sbox-reality-backups"
+BACKUP_ROOT="${BACKUP_ROOT:-/root/sbox-reality-backups}"
 BBR_SYSCTL_CONF="/etc/sysctl.d/99-sbox-reality-bbr.conf"
 
 PORT_ENV="/etc/sing-box/hy2-port-hopping.env"
@@ -288,6 +295,7 @@ purge_sing_box_package() {
 cleanup_all_sing_box_configs() {
   disable_hy2_port_hopping
   service_disable
+  rm -f "$WARP_CREDENTIALS_FILE"
   rm -rf \
     /etc/sing-box \
     /usr/local/etc/sing-box \
@@ -481,8 +489,40 @@ warp_normalize_rules() {
 }
 
 warp_validate_cli() {
+  local has_warp_action=0 raw_mode mode_token
+  local -a mode_items
+
+  (( WARP_RULES_EXPLICIT || WARP_OFF || WARP_RESET )) && has_warp_action=1
   if (( WARP_OFF && (WARP_RULES_EXPLICIT || WARP_RESET) )); then
     echo "错误：--warp-off 不能与 --warp-rules 或 --warp-reset 同时使用" >&2
+    return 1
+  fi
+  if (( has_warp_action )) && [[ "$ACTION" != "install" ]]; then
+    echo "错误：WARP 参数不能与恢复或卸载操作同时使用" >&2
+    return 1
+  fi
+  if (( has_warp_action )) && [[ -n "$INSTALL_MODE" ]]; then
+    raw_mode="${INSTALL_MODE//，/,}"
+    raw_mode="${raw_mode//、/,}"
+    raw_mode="${raw_mode//;/,}"
+    raw_mode="${raw_mode// /,}"
+    IFS=',' read -r -a mode_items <<< "$raw_mode"
+    for mode_token in "${mode_items[@]}"; do
+      mode_token="$(printf '%s' "$mode_token" | tr '[:upper:]' '[:lower:]')"
+      case "$mode_token" in
+        7|uninstall|remove|8|restore|backup)
+          echo "错误：WARP 参数不能与恢复或卸载模式同时使用" >&2
+          return 1
+          ;;
+      esac
+    done
+  fi
+  if (( WARP_OFF )) && [[ -n "$INSTALL_MODE" ]]; then
+    echo "错误：--warp-off 是独立操作，不能与协议安装模式同时使用" >&2
+    return 1
+  fi
+  if (( has_warp_action )) && [[ "$CONFIG_POLICY" == "keep" || "$CONFIG_POLICY" == "restore" ]]; then
+    echo "错误：WARP 参数不能与 --config $CONFIG_POLICY 同时使用" >&2
     return 1
   fi
 
@@ -490,7 +530,7 @@ warp_validate_cli() {
     WARP_RULES_JSON="$(warp_normalize_rules "$WARP_RULES_INPUT")" || return 1
   fi
 
-  if (( WARP_RULES_EXPLICIT || WARP_OFF || WARP_RESET )) && [[ -z "$INSTALL_MODE" ]]; then
+  if (( has_warp_action )) && [[ -z "$INSTALL_MODE" ]]; then
     ACTION="warp"
   fi
 }
@@ -1075,6 +1115,93 @@ warp_run_standalone() {
   else
     warp_apply_existing
   fi
+}
+
+warp_prompt_rules() {
+  local answer rules
+
+  printf '是否启用 Cloudflare WARP 按规则分流？[y/N]：' >&2
+  read -r answer
+  case "$answer" in
+    y|Y|yes|YES) ;;
+    *) return 0 ;;
+  esac
+
+  printf '请输入 geosite 规则名（例如 youtube,netflix,openai）：' >&2
+  read -r rules
+  WARP_RULES_JSON="$(warp_normalize_rules "$rules")" || return 1
+  WARP_RULES_INPUT="$rules"
+  WARP_RULES_EXPLICIT=1
+}
+
+warp_prepare_install_state() {
+  local rules_json
+
+  (( WARP_RULES_EXPLICIT || WARP_RESET )) || return 0
+
+  if (( WARP_RULES_EXPLICIT )); then
+    rules_json="$WARP_RULES_JSON"
+  elif [[ -s "$SERVER_CONF" ]]; then
+    rules_json="$(warp_current_rules "$SERVER_CONF")" || return 1
+  else
+    rules_json="[]"
+  fi
+  if ! jq -e 'type == "array" and length > 0' <<< "$rules_json" >/dev/null 2>&1; then
+    echo "错误：没有可用于安装的 WARP 规则，请指定 --warp-rules" >&2
+    return 1
+  fi
+  warp_validate_rule_urls "$rules_json" || return 1
+  backup_existing_files "before-warp-install" || return 1
+
+  mkdir -p "$(dirname "$SERVER_CONF")"
+  chmod 700 "$(dirname "$SERVER_CONF")"
+  WARP_INSTALL_STAGE_DIR="$(mktemp -d "$(dirname "$SERVER_CONF")/.sbox-warp-install.XXXXXX")"
+  WARP_STAGED_CREDENTIALS="$WARP_INSTALL_STAGE_DIR/credentials.json"
+  if ! warp_prepare_credentials "$WARP_STAGED_CREDENTIALS"; then
+    rm -rf "$WARP_INSTALL_STAGE_DIR"
+    WARP_INSTALL_STAGE_DIR=""
+    WARP_STAGED_CREDENTIALS=""
+    return 1
+  fi
+  WARP_INSTALL_RULES_JSON="$rules_json"
+  WARP_INSTALL_ACTIVE=1
+}
+
+warp_begin_install_transaction() {
+  (( WARP_INSTALL_ACTIVE )) || return 0
+
+  WARP_INSTALL_CONFIG_EXISTED=0
+  WARP_INSTALL_CREDENTIALS_EXISTED=0
+  WARP_INSTALL_SNAPSHOT_DIR="$(mktemp -d "$(dirname "$SERVER_CONF")/.sbox-warp-install-snapshot.XXXXXX")"
+  if [[ -e "$SERVER_CONF" ]]; then
+    WARP_INSTALL_CONFIG_EXISTED=1
+    cp -p "$SERVER_CONF" "$WARP_INSTALL_SNAPSHOT_DIR/config.json"
+  fi
+  if [[ -e "$WARP_CREDENTIALS_FILE" ]]; then
+    WARP_INSTALL_CREDENTIALS_EXISTED=1
+    cp -p "$WARP_CREDENTIALS_FILE" "$WARP_INSTALL_SNAPSHOT_DIR/credentials.json"
+  fi
+}
+
+warp_rollback_install_transaction() {
+  (( WARP_INSTALL_ACTIVE )) || return 0
+  [[ -n "$WARP_INSTALL_SNAPSHOT_DIR" && -d "$WARP_INSTALL_SNAPSHOT_DIR" ]] || return 0
+
+  warp_restore_file "$WARP_INSTALL_SNAPSHOT_DIR/config.json" \
+    "$SERVER_CONF" "$WARP_INSTALL_CONFIG_EXISTED"
+  warp_restore_file "$WARP_INSTALL_SNAPSHOT_DIR/credentials.json" \
+    "$WARP_CREDENTIALS_FILE" "$WARP_INSTALL_CREDENTIALS_EXISTED"
+  rm -rf "$WARP_INSTALL_SNAPSHOT_DIR" "$WARP_INSTALL_STAGE_DIR"
+  WARP_INSTALL_SNAPSHOT_DIR=""
+  WARP_INSTALL_STAGE_DIR=""
+}
+
+warp_finalize_install_transaction() {
+  (( WARP_INSTALL_ACTIVE )) || return 0
+  rm -rf "$WARP_INSTALL_SNAPSHOT_DIR" "$WARP_INSTALL_STAGE_DIR"
+  WARP_INSTALL_SNAPSHOT_DIR=""
+  WARP_INSTALL_STAGE_DIR=""
+  WARP_STAGED_CREDENTIALS=""
 }
 
 while [[ $# -gt 0 ]]; do
@@ -2153,6 +2280,7 @@ backup_existing_files() {
   local backup_dir source copied=0
   local -a sources=(
     "$SERVER_CONF"
+    "$WARP_CREDENTIALS_FILE"
     "$ANYTLS_CLIENT_OUT"
     "$ANYTLS_URL_FILE"
     "$ANYTLS_SURGE_CONF"
@@ -2339,6 +2467,7 @@ restore_latest_backup() {
   local backup_config
   local -a destinations=(
     "$SERVER_CONF"
+    "$WARP_CREDENTIALS_FILE"
     "$ANYTLS_CLIENT_OUT"
     "$ANYTLS_URL_FILE"
     "$ANYTLS_SURGE_CONF"
@@ -3523,53 +3652,73 @@ validate_existing_server_config() {
 }
 
 write_server_config() {
-  local selected_file temp_config
+  local selected_file="" temp_config warp_config="" final_config
 
-  temp_config="$(mktemp)"
+  mkdir -p "$(dirname "$SERVER_CONF")"
+  temp_config="$(mktemp "$(dirname "$SERVER_CONF")/.sbox-config.XXXXXX")"
   if [[ "$CONFIG_POLICY" != "merge" || ! -s "$SERVER_CONF" ]]; then
     write_fresh_server_config "$temp_config"
-    if ! run_sing_box check -c "$temp_config"; then
-      rm -f "$temp_config"
-      echo "错误：新配置未通过 sing-box 验证，现有配置保持不变" >&2
+  else
+    validate_existing_server_config
+    selected_file="$(mktemp)"
+    selected_inbounds_json > "$selected_file"
+
+    if ! jq --slurpfile selected "$selected_file" '
+      ($selected[0] | map(.tag)) as $selected_tags
+      | .inbounds = (
+          [
+            (.inbounds // [])[]
+            | select((.tag // "") as $tag | ($selected_tags | index($tag) | not))
+          ] + $selected[0]
+        )
+      | .outbounds = (
+          if ((.outbounds // []) | length) > 0 then .outbounds
+          else [{"type": "direct"}]
+          end
+        )
+    ' "$SERVER_CONF" > "$temp_config"; then
+      rm -f "$selected_file" "$temp_config"
+      echo "错误：合并 sing-box 配置失败，现有配置保持不变" >&2
       return 1
     fi
-    install -m 600 "$temp_config" "$SERVER_CONF"
-    rm -f "$temp_config"
-    return 0
+  fi
+  rm -f "$selected_file"
+
+  final_config="$temp_config"
+  if (( WARP_INSTALL_ACTIVE )); then
+    warp_config="$(mktemp "$(dirname "$SERVER_CONF")/.sbox-warp-config.XXXXXX")"
+    if ! warp_merge_config "$temp_config" "$WARP_STAGED_CREDENTIALS" \
+      "$WARP_INSTALL_RULES_JSON" "$warp_config"; then
+      rm -f "$temp_config" "$warp_config"
+      echo "错误：WARP 与协议配置合并失败，现有配置保持不变" >&2
+      return 1
+    fi
+    final_config="$warp_config"
   fi
 
-  validate_existing_server_config
-
-  selected_file="$(mktemp)"
-  selected_inbounds_json > "$selected_file"
-
-  if ! jq --slurpfile selected "$selected_file" '
-    ($selected[0] | map(.tag)) as $selected_tags
-    | .inbounds = (
-        [
-          (.inbounds // [])[]
-          | select((.tag // "") as $tag | ($selected_tags | index($tag) | not))
-        ] + $selected[0]
-      )
-    | .outbounds = (
-        if ((.outbounds // []) | length) > 0 then .outbounds
-        else [{"type": "direct"}]
-        end
-      )
-  ' "$SERVER_CONF" > "$temp_config"; then
-    rm -f "$selected_file" "$temp_config"
-    echo "错误：合并 sing-box 配置失败，现有配置保持不变" >&2
+  if ! run_sing_box check -c "$final_config"; then
+    rm -f "$temp_config" "$warp_config"
+    echo "错误：新配置未通过 sing-box 验证，现有配置保持不变" >&2
     return 1
   fi
 
-  if ! run_sing_box check -c "$temp_config"; then
-    rm -f "$selected_file" "$temp_config"
-    echo "错误：合并后的配置未通过 sing-box 验证，现有配置保持不变" >&2
-    return 1
+  if (( WARP_INSTALL_ACTIVE )); then
+    if ! warp_begin_install_transaction; then
+      rm -f "$temp_config" "$warp_config"
+      return 1
+    fi
+    chmod 600 "$final_config" "$WARP_STAGED_CREDENTIALS"
+    if ! mv -f "$final_config" "$SERVER_CONF" \
+      || ! mv -f "$WARP_STAGED_CREDENTIALS" "$WARP_CREDENTIALS_FILE"; then
+      warp_rollback_install_transaction
+      rm -f "$temp_config" "$warp_config"
+      return 1
+    fi
+  else
+    chmod 600 "$final_config"
+    mv -f "$final_config" "$SERVER_CONF"
   fi
-
-  install -m 600 "$temp_config" "$SERVER_CONF"
-  rm -f "$selected_file" "$temp_config"
+  rm -f "$temp_config" "$warp_config"
 }
 
 detect_server_ip() {
@@ -3765,6 +3914,7 @@ SURGE
 
 write_info_files() {
   local port_service_config
+  local warp_rules_json="[]"
   local has_anytls=0
   local has_vless=0
   local has_hy2=0
@@ -3790,6 +3940,7 @@ write_info_files() {
   jq -e '.inbounds[]? | select(.tag == "snell5-in")' "$SERVER_CONF" >/dev/null 2>&1 && has_snell5=1
   jq -e '.inbounds[]? | select(.tag == "snell6-in")' "$SERVER_CONF" >/dev/null 2>&1 && has_snell6=1
   jq -e '.inbounds[]? | select(.tag == "direct-in")' "$SERVER_CONF" >/dev/null 2>&1 && has_direct=1
+  warp_rules_json="$(warp_current_rules "$SERVER_CONF" 2>/dev/null || printf '[]')"
 
   cat > "$COMBINED_INFO" << TXT
 sbox-reality 统一安装完成
@@ -3802,6 +3953,7 @@ sbox-reality 统一安装完成
   已安装 Snell v5：$has_snell5
   已安装 Snell v6：$has_snell6
   已安装 Direct 固定目标中转：$has_direct
+  WARP 分流规则：$(jq -r 'if length == 0 then "未启用" else join(",") end' <<< "$warp_rules_json")
 TXT
 
   if (( INSTALL_ANYTLS )); then
@@ -4154,6 +4306,9 @@ main() {
 
   choose_install_ports
   prepare_inputs
+  if [[ -t 0 ]] && (( ! WARP_RULES_EXPLICIT && ! WARP_RESET )); then
+    warp_prompt_rules
+  fi
 
   echo "sbox-reality 统一安装脚本"
   echo "  安装 AnyTLS + REALITY：$INSTALL_ANYTLS"
@@ -4192,14 +4347,21 @@ main() {
     echo "  Direct 监听端口：$DIRECT_PORT ($DIRECT_PORT_MODE)"
     echo "  Direct 中转目标：${DIRECT_TARGET_ADDRESS}:${DIRECT_TARGET_PORT}"
   fi
+  if (( WARP_RULES_EXPLICIT )); then
+    echo "  WARP 分流规则：$(jq -r 'join(",")' <<< "$WARP_RULES_JSON")"
+  elif (( WARP_RESET )); then
+    echo "  WARP 凭据：重新注册并沿用现有规则"
+  fi
   echo
 
-  if [[ "$CONFIG_POLICY" == "new" && -s "$SERVER_CONF" ]]; then
+  if [[ "$CONFIG_POLICY" == "new" && -s "$SERVER_CONF" ]] \
+    && (( ! WARP_RULES_EXPLICIT && ! WARP_RESET )); then
     backup_existing_files "before-new-config"
   fi
 
   install_dependencies
   validate_existing_server_config
+  warp_prepare_install_state
   enable_bbr_and_fq
   verify_snell_support
 
@@ -4219,6 +4381,9 @@ main() {
   fi
 
   write_server_config
+  if (( WARP_INSTALL_ACTIVE )); then
+    trap 'status=$?; trap - ERR; warp_rollback_install_transaction; service_restart || true; exit "$status"' ERR
+  fi
 
   if (( INSTALL_HY2 )); then
     if [[ "$HY2_PORT_HOPPING" == "on" ]]; then
@@ -4248,10 +4413,14 @@ main() {
     write_snell_clients
   fi
 
-  run_sing_box check -c "$SERVER_CONF"
   service_reload
   service_enable
   service_restart
+
+  if (( WARP_INSTALL_ACTIVE )); then
+    trap - ERR
+    warp_finalize_install_transaction
+  fi
 
   write_info_files
   print_summary

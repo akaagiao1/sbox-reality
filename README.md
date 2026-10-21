@@ -10,6 +10,7 @@
 - **Snell v5（Surge）**
 - **Snell v6（Surge Beta）**
 - **Direct 固定目标中转**
+- **Cloudflare WARP 按 geosite 规则分流**
 - **同时安装多个入站到同一个 sing-box 配置**
 - **默认开启 BBR + fq，并写入持久化 sysctl 配置**
 - **按协议卸载、保留配置重装或生成全新配置**
@@ -87,6 +88,38 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 ```
 
 同时安装时，脚本会生成同一个 `/etc/sing-box/config.json`，其中包含所选协议入站；不会用第二个协议覆盖第一个协议。
+
+---
+
+## Cloudflare WARP 按规则分流
+
+安装协议时可以同时指定一个或多个服务名。例如下面的命令会让 YouTube 和 Netflix 流量走 Cloudflare WARP，其他流量继续使用原有路由：
+
+```bash
+bash install.sh --mode anytls --warp-rules youtube,netflix
+```
+
+已有 sing-box 配置时，不需要重装协议也能单独更新：
+
+```bash
+# 用完整新列表覆盖旧的 WARP 规则列表
+bash install.sh --warp-rules youtube,openai
+
+# 关闭 WARP 分流，但保留已注册凭据
+bash install.sh --warp-off
+
+# 重新向 Cloudflare 注册凭据，并沿用当前规则
+bash install.sh --warp-reset
+
+# 重新注册凭据，同时覆盖规则列表
+bash install.sh --warp-reset --warp-rules netflix
+```
+
+不带参数交互安装时，脚本也会询问是否启用 WARP。规则名支持英文逗号、中文逗号、顿号、分号或空格分隔，并会自动转为小写和去重。再次设置采用完整列表覆盖语义：原来是 `youtube,netflix`，再次输入 `openai` 后只保留 OpenAI。
+
+规则来自 [MetaCubeX/meta-rules-dat](https://github.com/MetaCubeX/meta-rules-dat/tree/sing) 的 `sing/geo-lite/geosite` 二进制规则集。例如 `youtube` 对应 `geo-lite/geosite/youtube.srs`。sing-box 通过脚本管理的 `sbox-warp-direct` 直连出口下载这些规则，匹配后转到 `sbox-warp-out` WireGuard endpoint；未匹配流量的 `route.final` 和现有自定义规则保持原样。
+
+首次启用会注册一份免费 WARP 设备凭据，后续修改规则直接复用。凭据保存在 `/etc/sing-box/sbox-warp-credentials.json`，权限为 `600`，备份和恢复配置时会一起处理。该文件包含 WARP 私钥，请勿上传、公开或复制到日志中。只有 `--warp-reset` 会主动注册新凭据；`--warp-off` 会保留旧凭据，完整卸载 sing-box 才会删除。
 
 ---
 
@@ -384,6 +417,9 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 | `--uninstall` | 卸载范围：`anytls`、`vless`、`hy2`、`snell5`、`snell6` 或 `all` | 卸载子菜单 |
 | `--purge` | 卸载全部配置时同时删除 sing-box 软件包 | 关闭 |
 | `-y`, `--yes` | 跳过卸载确认，适合非交互执行 | 关闭 |
+| `--warp-rules` | MetaCubeX geosite 规则名，可一次指定多个，如 `youtube,netflix` | 关闭 |
+| `--warp-off` | 关闭 WARP 分流并保留注册凭据 | 关闭 |
+| `--warp-reset` | 重新注册 WARP 凭据，未指定规则时沿用当前列表 | 关闭 |
 | `-d`, `--domain` | REALITY 握手域名 | `www.apple.com` |
 | `-p`, `--port` | 当前单协议模式的监听端口；同时安装时建议使用各协议端口选项 | `auto` |
 | `--anytls-port` | AnyTLS TCP 监听端口 | `auto` |

@@ -90,6 +90,16 @@ test_normalization() {
     source_with_args --warp-off --warp-rules youtube
   assert_fails "warp-off and reset should conflict" \
     source_with_args --warp-off --warp-reset
+  assert_fails "warp-off should not be combined with protocol install" \
+    source_with_args --mode anytls --warp-off
+  assert_fails "restore should not be overridden by WARP rules" \
+    source_with_args --restore --warp-rules youtube
+  assert_fails "uninstall should not be overridden by warp-off" \
+    source_with_args --uninstall anytls --warp-off
+  assert_fails "config keep should not silently ignore WARP rules" \
+    source_with_args --mode anytls --config keep --warp-rules youtube
+  assert_fails "action aliases in --mode should not ignore WARP rules" \
+    source_with_args --mode uninstall --warp-rules youtube
 }
 
 write_registration_response() {
@@ -609,6 +619,97 @@ JSON
     ' _ "$INSTALL_SCRIPT" "$TEST_TMP/main-disable-sentinel"
 }
 
+test_integration() {
+  local prompt_state
+  local config="$TEST_TMP/install-config.json"
+  local credentials="$TEST_TMP/install-credentials.json"
+  local staged_credentials="$TEST_TMP/install-staged-credentials.json"
+  local check_count="$TEST_TMP/install-check-count"
+  local backup_root="$TEST_TMP/backups"
+
+  prompt_state="$(printf 'y\nYouTube， netflix youtube\n' | bash -c '
+    script=$1; set --; source "$script"
+    warp_prompt_rules
+    printf "%s|%s|%s\n" "$WARP_RULES_EXPLICIT" "$WARP_RULES_INPUT" "$WARP_RULES_JSON"
+  ' _ "$INSTALL_SCRIPT")"
+  assert_eq '1|YouTube， netflix youtube|["youtube","netflix"]' "$prompt_state" \
+    "interactive WARP prompt should accept and normalize multiple rules"
+
+  write_test_credentials "$staged_credentials"
+  SERVER_CONF="$config" WARP_CREDENTIALS_FILE="$credentials" \
+    bash -c '
+      script=$1; staged_credentials=$2; check_count=$3
+      set --; source "$script"
+      CONFIG_POLICY=new
+      INSTALL_DIRECT=1
+      DIRECT_PORT=23456
+      DIRECT_TARGET_ADDRESS=example.com
+      DIRECT_TARGET_PORT=443
+      WARP_INSTALL_ACTIVE=1
+      WARP_INSTALL_RULES_JSON="[\"youtube\"]"
+      WARP_STAGED_CREDENTIALS="$staged_credentials"
+      backup_existing_files() { return 0; }
+      run_sing_box() {
+        count=0; [[ -f "$check_count" ]] && count="$(cat "$check_count")"
+        printf "%s\n" "$(( count + 1 ))" > "$check_count"
+        return 0
+      }
+      write_server_config
+      warp_finalize_install_transaction
+    ' _ "$INSTALL_SCRIPT" "$staged_credentials" "$check_count"
+  assert_eq '1' "$(cat "$check_count")" \
+    "combined protocol and WARP config should receive one final check"
+  assert_succeeds "fresh install should contain protocol and selective WARP routing" \
+    jq -e '
+      ([.inbounds[] | select(.tag == "direct-in")] | length) == 1
+      and ([.endpoints[] | select(.tag == "sbox-warp-out")] | length) == 1
+      and .route.rules[1].rule_set == ["sbox-warp-geosite-youtube"]
+    ' "$config"
+  assert_succeeds "combined install should place staged credentials" \
+    bash -c 'test -s "$1" && test "$(stat -c %a "$1")" = 600' _ "$credentials"
+
+  assert_succeeds "combined install should back up before staging new credentials" \
+    env SERVER_CONF="$config" WARP_CREDENTIALS_FILE="$credentials" bash -c '
+      script=$1; order_file=$2; fixture=$3
+      set --; source "$script"
+      WARP_RULES_EXPLICIT=1
+      WARP_RULES_JSON="[\"youtube\"]"
+      warp_validate_rule_urls() { return 0; }
+      backup_existing_files() { printf "backup\n" >> "$order_file"; }
+      warp_prepare_credentials() {
+        printf "prepare\n" >> "$order_file"
+        cp "$fixture" "$1"
+      }
+      warp_prepare_install_state
+      [[ "$(tr "\n" " " < "$order_file")" == "backup prepare " ]]
+      warp_finalize_install_transaction
+    ' _ "$INSTALL_SCRIPT" "$TEST_TMP/install-order.txt" "$credentials"
+
+  BACKUP_ROOT="$backup_root" SERVER_CONF="$config" WARP_CREDENTIALS_FILE="$credentials" \
+    bash -c '
+      script=$1; set --; source "$script"
+      backup_existing_files integration-test
+      test -f "$LAST_BACKUP_DIR/$(basename "$WARP_CREDENTIALS_FILE")"
+      declare -f restore_latest_backup | grep -F "\$WARP_CREDENTIALS_FILE" >/dev/null
+      declare -f cleanup_all_sing_box_configs | grep -F "\$WARP_CREDENTIALS_FILE" >/dev/null
+    ' _ "$INSTALL_SCRIPT" || fail "backup, restore, and full cleanup should include WARP credentials"
+  PASS_COUNT=$(( PASS_COUNT + 1 ))
+
+  assert_succeeds "legacy wrappers should forward all WARP arguments" \
+    bash -c '
+      for script in "$@"; do
+        grep -F '\''"$@"'\'' "$script" >/dev/null
+      done
+    ' _ "$ROOT_DIR/install-anytls-reality.sh" "$ROOT_DIR/install-hysteria2-surge.sh" "$ROOT_DIR/reality.sh"
+
+  assert_succeeds "README should document WARP commands, source, and secret path" \
+    bash -c '
+      rg -q -- "--warp-rules" "$1"
+      rg -q "MetaCubeX/meta-rules-dat" "$1"
+      rg -q "/etc/sing-box/sbox-warp-credentials.json" "$1"
+    ' _ "$ROOT_DIR/README.md"
+}
+
 case "$TEST_GROUP" in
   normalization)
     test_normalization
@@ -622,14 +723,15 @@ case "$TEST_GROUP" in
   transaction)
     test_transaction
     ;;
+  integration)
+    test_integration
+    ;;
   all)
     test_normalization
     test_credentials
     test_config
     test_transaction
-    ;;
-  integration)
-    fail "test group not implemented yet: $TEST_GROUP"
+    test_integration
     ;;
   *)
     fail "unknown test group: $TEST_GROUP"
