@@ -186,6 +186,9 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --uninstall snell5
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --uninstall snell6
 
+# 只卸载 Direct 固定目标中转
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --uninstall direct
+
 # 卸载全部协议配置，但保留 sing-box 程序
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --uninstall all
 
@@ -195,7 +198,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 
 卸载前会要求确认，并把现有配置备份到 `/root/sbox-reality-backups/`。卸载备份采用单份轮换，只保留最新的一份；如果服务器已经没有配置，则不会创建空备份，也不会删除已有的有效备份。非交互执行时可以增加 `--yes`。
 
-只卸载一个协议时，脚本先备份完整配置，再只删除对应的 `anytls-in`、`vless-in`、`hy2-in`、`snell5-in` 或 `snell6-in`，其他入站会继续运行。选择 `all` 时不再依赖入站 tag，而是备份后直接删除全部 sing-box 配置目录和客户端文件。
+只卸载一个协议时，脚本先备份完整配置，再只删除对应的 `anytls-in`、`vless-in`、`hy2-in`、`snell5-in`、`snell6-in` 或 `direct-in`，其他入站会继续运行。选择 `all` 时不再依赖入站 tag，而是备份后直接删除全部 sing-box 配置目录和客户端文件。
 
 使用 `--uninstall all --purge` 时还会清理其他脚本常用的 sing-box 安装位置，包括 `/usr/bin/sing-box`、`/usr/local/bin/sing-box`、`/opt/sing-box`、systemd/OpenRC 服务、配置目录、运行数据、日志、cron 和 logrotate 文件。备份目录 `/root/sbox-reality-backups/` 明确排除，始终保留。脚本不会执行危险的全盘模糊删除，避免误删名称中偶然包含 `sing-box` 的个人文件。
 
@@ -382,6 +385,14 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install-hysteria2-surge.sh)
 ```
 
+这些包装脚本从 `main` 获取统一安装脚本。用于生产环境时，可通过 `SBOX_REALITY_INSTALL_REF` 固定标签或提交，并通过 `SBOX_REALITY_INSTALL_SHA256` 校验下载文件：
+
+```bash
+SBOX_REALITY_INSTALL_REF=<tag-or-commit> \
+SBOX_REALITY_INSTALL_SHA256=<64位SHA-256> \
+bash reality.sh --mode vless
+```
+
 ---
 
 ## 功能特性
@@ -389,7 +400,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 - 自动安装 / 更新 sing-box
 - 下载 sing-box 官方发布文件并验证 GitHub 提供的 SHA-256
 - 菜单选择安装、重装或卸载
-- 重装时可沿用旧配置，或自动备份后原子生成新配置
+- 安装和恢复使用文件快照事务，服务启动失败时自动回滚配置、证书、端口跳跃文件和客户端输出
 - 可单独卸载 AnyTLS、VLESS、HY2，或完整卸载
 - 默认随机选择当前未被占用的高端口
 - 支持手动指定 AnyTLS / VLESS / Hysteria2 监听端口
@@ -403,6 +414,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 - 支持自定义 REALITY 握手域名
 - 自动执行 `sing-box check`
 - 自动启用并重启 sing-box 服务
+- 增量安装前检查现有入站端口，避免新协议与已有监听端口冲突
+- 备份清理只处理带安装器标记的受管目录，不会遍历删除备份根目录下的普通文件夹
 - 配置简洁，便于二次修改
 
 ---
@@ -421,10 +434,10 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 
 | 参数 | 说明 | 默认值 |
 | --- | --- | --- |
-| `-m`, `--mode` | 操作模式：`1`/`anytls`、`2`/`hy2`、`3`/`vless`、`4`/`snell5`、`5`/`snell6`、`6`/`full`、`7`/`uninstall`、`8`/`restore`；协议可用逗号自由多选，如 `1,2,3` | 交互菜单 |
+| `-m`, `--mode` | 操作模式：`1`/`anytls`、`2`/`hy2`、`3`/`vless`、`4`/`snell5`、`5`/`snell6`、`6`/`full`、`7`/`uninstall`、`8`/`restore`、`9`/`direct`；协议可用逗号自由多选，如 `1,2,3` | 交互菜单 |
 | `--restore` | 直接恢复最近一次有效备份 | 关闭 |
 | `--config` | 选择 `merge` 增量合并、`keep` 沿用当前配置、`restore` 恢复最近备份或 `new` 生成新配置 | `merge` |
-| `--uninstall` | 卸载范围：`anytls`、`vless`、`hy2`、`snell5`、`snell6` 或 `all` | 卸载子菜单 |
+| `--uninstall` | 卸载范围：`anytls`、`vless`、`hy2`、`snell5`、`snell6`、`direct` 或 `all` | 卸载子菜单 |
 | `--purge` | 卸载全部配置时同时删除 sing-box 软件包 | 关闭 |
 | `-y`, `--yes` | 跳过卸载确认，适合非交互执行 | 关闭 |
 | `--warp-rules` | MetaCubeX geosite 规则名，可一次指定多个，如 `youtube,netflix` | 关闭 |
@@ -432,6 +445,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 | `--warp-reset` | 重新注册 WARP 凭据，未指定规则时沿用当前列表 | 关闭 |
 | `-d`, `--domain` | REALITY 握手域名 | `www.apple.com` |
 | `-p`, `--port` | 当前单协议模式的监听端口；同时安装时建议使用各协议端口选项 | `auto` |
+| `--server-host` | 写入客户端 JSON 和分享链接的公网 IP 或域名；自动检测失败时必填 | 自动检测 |
 | `--anytls-port` | AnyTLS TCP 监听端口 | `auto` |
 | `--vless-domain` | VLESS REALITY 握手域名 | `www.apple.com` |
 | `--vless-port` | VLESS TCP 监听端口 | `auto` |
@@ -445,6 +459,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 | `HIGH_PORT_MIN` | 随机端口最小值 | `20000` |
 | `HIGH_PORT_MAX` | 随机端口最大值 | `65535` |
 | `INSTALL_MODE` | 安装模式；协议可用逗号自由多选，如 `1,2,3` | 交互菜单 |
+| `SERVER_HOST` | 写入客户端的公网 IP 或域名，等价于 `--server-host` | 自动检测 |
 | `PORT` | 兼容旧脚本的监听端口；会按当前模式分配给对应协议 | 空 |
 | `ANYTLS_PORT` | AnyTLS TCP 监听端口 | `auto` |
 | `VLESS_DOMAIN` | VLESS REALITY 握手域名 | `www.apple.com` |
@@ -703,6 +718,21 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 
 ---
 
+## 测试
+
+仓库测试不依赖真实 VPS 安装，主要包括参数解析、WARP 配置合并与回滚、备份安全、端口冲突、客户端文件事务和安全文件名处理。
+
+在 Debian/Ubuntu 上安装 `bash curl jq openssl git ripgrep` 后运行：
+
+```bash
+bash tests/test-warp-routing.sh all
+shellcheck -S warning install.sh reality.sh install-*.sh tests/test-warp-routing.sh
+```
+
+设置 `SING_BOX_TEST_BIN=/path/to/sing-box` 后，测试还会执行当前 Alpha 二进制的配置 schema 和规则集启动验证。GitHub Actions 会自动下载最新 Alpha 并运行这些检查。
+
+---
+
 ## License
 
-MIT
+AGPL-3.0
