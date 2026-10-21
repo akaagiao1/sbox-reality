@@ -82,12 +82,16 @@ jobs:
             -o /tmp/sing-box.tar.gz
           test -s /tmp/sing-box.tar.gz
 
-      - name: Verify and extract sing-box Alpha
+      - name: Verify sing-box Alpha checksum
         env:
           DIGEST: ${{ steps.alpha.outputs.digest }}
         run: |
           set -euo pipefail
           echo "${DIGEST#sha256:}  /tmp/sing-box.tar.gz" | sha256sum -c -
+
+      - name: Extract sing-box Alpha
+        run: |
+          set -euo pipefail
           tar -xzf /tmp/sing-box.tar.gz -C /tmp
           binary="$(find /tmp -type f -name sing-box -perm -111 | head -n 1)"
           test -n "$binary"
