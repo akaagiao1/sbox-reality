@@ -332,7 +332,7 @@ bash install.sh
 bash install.sh --mode full -d www.microsoft.com --anytls-port 8443 --vless-port auto --hy2-port 20000 --ports 20000-50000
 ```
 
-旧的单协议脚本仍然保留，方便兼容已有命令：
+旧的单协议脚本仍然保留，方便兼容已有命令；它们现在会转交给统一脚本执行，以保持安装、校验和备份行为一致：
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install-anytls-reality.sh)
@@ -344,8 +344,9 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 ## 功能特性
 
 - 自动安装 / 更新 sing-box
+- 下载 sing-box 官方发布文件并验证 GitHub 提供的 SHA-256
 - 菜单选择安装、重装或卸载
-- 重装时可沿用旧配置，或自动备份后生成新配置
+- 重装时可沿用旧配置，或自动备份后原子生成新配置
 - 可单独卸载 AnyTLS、VLESS、HY2，或完整卸载
 - 默认随机选择当前未被占用的高端口
 - 支持手动指定 AnyTLS / VLESS / Hysteria2 监听端口

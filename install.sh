@@ -307,10 +307,11 @@ cleanup_all_sing_box_installations() {
     /usr/lib/systemd/system/sing-box.service \
     /lib/systemd/system/sing-box.service
 
-  if [[ -n "$detected_binary" && "$(basename "$detected_binary")" == "sing-box" \
-    && "$detected_binary" != "$BACKUP_ROOT"/* ]]; then
-    rm -f "$detected_binary"
-  fi
+  case "$detected_binary" in
+    /usr/bin/sing-box|/usr/local/bin/sing-box|/opt/sing-box/*)
+      rm -f -- "$detected_binary"
+      ;;
+  esac
 
   if command -v systemctl >/dev/null 2>&1; then
     systemctl daemon-reload >/dev/null 2>&1 || true
@@ -973,6 +974,20 @@ validate_proxy_name() {
   [[ "$PROXY_NAME" =~ ^[A-Za-z0-9_.-]+$ ]]
 }
 
+validate_hostname() {
+  local hostname="$1"
+  local label
+  local -a labels
+
+  (( ${#hostname} >= 1 && ${#hostname} <= 253 )) || return 1
+  [[ "$hostname" != .* && "$hostname" != *. && "$hostname" != *..* ]] || return 1
+  IFS='.' read -r -a labels <<< "$hostname"
+  for label in "${labels[@]}"; do
+    (( ${#label} >= 1 && ${#label} <= 63 )) || return 1
+    [[ "$label" =~ ^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$ ]] || return 1
+  done
+}
+
 is_tcp_port_in_use() {
   local port="$1"
   ss -H -lntp 2>/dev/null | awk -v p="$port" '$4 ~ ":" p "$" {print}' | grep -q .
@@ -1609,7 +1624,9 @@ choose_config_policy() {
 restore_file_from_backup() {
   local backup_dir="$1"
   local destination="$2"
-  local source="${backup_dir}/$(basename "$destination")"
+  local source
+
+  source="${backup_dir}/$(basename "$destination")"
 
   [[ -f "$source" ]] || return 0
   mkdir -p "$(dirname "$destination")"
@@ -1999,8 +2016,8 @@ prepare_inputs() {
   HY2_SNI="$(strip_host "$HY2_SNI")"
 
   if (( INSTALL_ANYTLS )); then
-    if [[ -z "$REALITY_DOMAIN" || "$REALITY_DOMAIN" =~ [[:space:]] ]]; then
-      echo "错误：REALITY 域名不能为空或包含空白字符"
+    if ! validate_hostname "$REALITY_DOMAIN"; then
+      echo "错误：REALITY 域名格式无效：$REALITY_DOMAIN"
       exit 1
     fi
 
@@ -2022,8 +2039,8 @@ prepare_inputs() {
   fi
 
   if (( INSTALL_VLESS )); then
-    if [[ -z "$VLESS_DOMAIN" || "$VLESS_DOMAIN" =~ [[:space:]] ]]; then
-      echo "错误：VLESS REALITY 域名不能为空或包含空白字符"
+    if ! validate_hostname "$VLESS_DOMAIN"; then
+      echo "错误：VLESS REALITY 域名格式无效：$VLESS_DOMAIN"
       exit 1
     fi
 
@@ -2113,8 +2130,8 @@ prepare_inputs() {
       *) echo "错误：--port-hopping 只能是 on 或 off"; exit 1 ;;
     esac
 
-    if [[ -z "$HY2_SNI" || "$HY2_SNI" =~ [[:space:]] ]]; then
-      echo "错误：Hysteria2 SNI 不能为空或包含空白字符"
+    if ! validate_hostname "$HY2_SNI"; then
+      echo "错误：Hysteria2 SNI 格式无效：$HY2_SNI"
       exit 1
     fi
 
@@ -2243,6 +2260,17 @@ fetch_preferred_sing_box_version() {
     "https://data.jsdelivr.com/v1/package/gh/SagerNet/sing-box"
   )
 
+  if command -v git >/dev/null 2>&1; then
+    version="$(git ls-remote --tags https://github.com/SagerNet/sing-box.git 'v*-alpha.*' \
+      | awk '{ sub(/^refs\/tags\/v/, "", $2); print $2 }' \
+      | awk '/^[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+$/' \
+      | sort -V | tail -n 1)"
+    if [[ -n "$version" ]]; then
+      printf '%s' "$version"
+      return 0
+    fi
+  fi
+
   for url in "${sources[@]}"; do
     if payload="$(curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors \
       --connect-timeout 10 --max-time 60 "$url")"; then
@@ -2290,23 +2318,91 @@ sing_box_alpine_arch() {
 fetch_sing_box_alpine_url() {
   local version="$1"
   local arch="$2"
-  local payload url
-
-  if payload="$(curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors \
-    --connect-timeout 10 --max-time 60 \
-    "https://api.github.com/repos/SagerNet/sing-box/releases/tags/v${version}")"; then
-    url="$(printf '%s' "$payload" | jq -r --arg suffix "-linux-${arch}-musl.tar.gz" '
-      .assets[]?.browser_download_url
-      | select(endswith($suffix))
-    ' | head -n 1)"
-    if [[ -n "$url" && "$url" != "null" ]]; then
-      printf '%s' "$url"
-      return 0
-    fi
-  fi
 
   printf 'https://github.com/SagerNet/sing-box/releases/download/v%s/sing-box-%s-linux-%s-musl.tar.gz' \
     "$version" "$version" "$arch"
+}
+
+fetch_release_asset_sha256() {
+  local version="$1"
+  local asset_name="$2"
+  local payload digest=""
+
+  if payload="$(curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors \
+    --connect-timeout 10 --max-time 60 \
+    "https://github.com/SagerNet/sing-box/releases/expanded_assets/v${version}")"; then
+    digest="$(printf '%s' "$payload" | awk -v asset="$asset_name" '
+      index($0, ">" asset "<") { found = 1 }
+      found && !printed && match($0, /sha256:[0-9a-fA-F]+/) {
+        print substr($0, RSTART + 7, RLENGTH - 7)
+        printed = 1
+      }
+    ')"
+  fi
+
+  if [[ ! "$digest" =~ ^[0-9a-fA-F]{64}$ ]] \
+    && payload="$(curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors \
+      --connect-timeout 10 --max-time 60 \
+      "https://api.github.com/repos/SagerNet/sing-box/releases/tags/v${version}" 2>/dev/null)"; then
+    digest="$(printf '%s' "$payload" | jq -r --arg name "$asset_name" '
+      first(.assets[]? | select(.name == $name) | (.digest // empty)) // empty
+    ' | sed -n 's/^sha256:\([0-9a-fA-F]\{64\}\)$/\1/p')"
+  fi
+
+  if [[ ! "$digest" =~ ^[0-9a-fA-F]{64}$ ]]; then
+    echo "错误：无法获取发布文件的 SHA-256：$asset_name" >&2
+    return 1
+  fi
+  printf '%s' "${digest,,}"
+}
+
+download_verified_release_asset() {
+  local version="$1"
+  local asset_name="$2"
+  local destination="$3"
+  local expected url
+
+  expected="$(fetch_release_asset_sha256 "$version" "$asset_name")" || return 1
+  url="https://github.com/SagerNet/sing-box/releases/download/v${version}/${asset_name}"
+  echo "Downloading ${url}"
+  curl -fL --retry 3 --retry-delay 2 --retry-all-errors \
+    --connect-timeout 10 --max-time 120 \
+    -o "$destination" "$url" || return 1
+  printf '%s  %s\n' "$expected" "$destination" | sha256sum -c - >/dev/null || {
+    echo "错误：发布文件 SHA-256 校验失败：$asset_name" >&2
+    return 1
+  }
+}
+
+install_sing_box_debian() {
+  local version="$1"
+  local arch asset_name tmpdir package_path real_dpkg
+
+  arch="$(dpkg --print-architecture)"
+  case "$arch" in
+    amd64|arm64|armel|armhf|i386|loongarch64|mips64el|mipsel|ppc64el|riscv64|s390x)
+      ;;
+    *)
+      echo "错误：暂不支持当前 Debian/Ubuntu 架构：$arch" >&2
+      return 1
+      ;;
+  esac
+
+  asset_name="sing-box_${version}_linux_${arch}.deb"
+  tmpdir="$(mktemp -d)"
+  package_path="${tmpdir}/${asset_name}"
+  if ! download_verified_release_asset "$version" "$asset_name" "$package_path"; then
+    rm -rf -- "$tmpdir"
+    return 1
+  fi
+
+  real_dpkg="$(command -v dpkg)"
+  if ! DEBIAN_FRONTEND=noninteractive "$real_dpkg" \
+    --force-confdef --force-confold -i "$package_path"; then
+    rm -rf -- "$tmpdir"
+    return 1
+  fi
+  rm -rf -- "$tmpdir"
 }
 
 install_sing_box_openrc_service() {
@@ -2340,17 +2436,15 @@ OPENRC
 
 install_sing_box_alpine() {
   local version="$1"
-  local arch archive_url tmpdir archive_path binary_path
+  local arch archive_url asset_name tmpdir archive_path binary_path
 
   arch="$(sing_box_alpine_arch)"
   archive_url="$(fetch_sing_box_alpine_url "$version" "$arch")"
+  asset_name="${archive_url##*/}"
   tmpdir="$(mktemp -d)"
   archive_path="${tmpdir}/sing-box.tar.gz"
 
-  echo "Downloading ${archive_url}"
-  if ! curl -fL --retry 3 --retry-delay 2 --retry-all-errors \
-    --connect-timeout 10 --max-time 120 \
-    -o "$archive_path" "$archive_url"; then
+  if ! download_verified_release_asset "$version" "$asset_name" "$archive_path"; then
     rm -rf "$tmpdir"
     return 1
   fi
@@ -2375,17 +2469,17 @@ install_sing_box_alpine() {
 }
 
 install_dependencies() {
-  local release_version attempt installed=0 dpkg_wrapper_dir="" real_dpkg=""
+  local release_version attempt installed=0
 
   echo "正在安装依赖……"
   if [[ "$PLATFORM" == "alpine" ]]; then
-    apk add --no-cache bash curl openssl ca-certificates iproute2 coreutils jq nftables iptables openrc
+    apk add --no-cache bash curl git openssl ca-certificates iproute2 coreutils jq nftables iptables openrc
   else
     apt update
     DEBIAN_FRONTEND=noninteractive apt install -y \
       -o Dpkg::Options::="--force-confdef" \
       -o Dpkg::Options::="--force-confold" \
-      curl openssl ca-certificates iproute2 coreutils jq nftables iptables procps
+      curl git openssl ca-certificates iproute2 coreutils jq nftables iptables procps
   fi
   if ! release_version="$(fetch_preferred_sing_box_version)"; then
     echo "错误：获取 sing-box 最新 Alpha 版本失败"
@@ -2397,30 +2491,7 @@ install_dependencies() {
       if [[ "$PLATFORM" == "alpine" ]]; then
         install_sing_box_alpine "$release_version"
       else
-        # The upstream installer calls `dpkg -i` directly.  When this script is
-        # launched with bash <(curl ...), dpkg cannot read an answer to a
-        # conffile prompt and aborts with "end of file on stdin".  Put a small
-        # dpkg wrapper first in PATH so upgrades keep the user's config without
-        # prompting.  --force-confdef also makes dpkg use its default for any
-        # other conffile decision.
-        real_dpkg="$(command -v dpkg)"
-        dpkg_wrapper_dir="$(mktemp -d)"
-        cat > "$dpkg_wrapper_dir/dpkg" << WRAPPER
-#!/bin/sh
-exec "$real_dpkg" --force-confdef --force-confold "\$@"
-WRAPPER
-        chmod 755 "$dpkg_wrapper_dir/dpkg"
-
-        if ! curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors \
-          --connect-timeout 10 --max-time 60 https://sing-box.app/install.sh \
-          | env DEBIAN_FRONTEND=noninteractive PATH="$dpkg_wrapper_dir:$PATH" \
-            sh -s -- --version "$release_version"; then
-          rm -rf -- "$dpkg_wrapper_dir"
-          dpkg_wrapper_dir=""
-          false
-        fi
-        rm -rf -- "$dpkg_wrapper_dir"
-        dpkg_wrapper_dir=""
+        install_sing_box_debian "$release_version"
       fi
     } && resolve_sing_box_binary; then
       installed=1
@@ -2433,7 +2504,6 @@ WRAPPER
   done
   hash -r
   if (( ! installed )); then
-    [[ -z "$dpkg_wrapper_dir" ]] || rm -rf -- "$dpkg_wrapper_dir"
     echo "错误：sing-box v${release_version} 安装失败，请稍后重试"
     exit 1
   fi
@@ -2687,13 +2757,14 @@ JSON
 }
 
 write_fresh_server_config() {
+  local destination="${1:-$SERVER_CONF}"
   local inbounds
 
   inbounds="$(selected_inbounds_json)"
   inbounds="${inbounds#[}"
   inbounds="${inbounds%]}"
 
-  cat > "$SERVER_CONF" << JSON
+  cat > "$destination" << JSON
 {
   "inbounds": [
 ${inbounds}
@@ -2780,18 +2851,25 @@ validate_existing_server_config() {
 write_server_config() {
   local selected_file temp_config
 
+  temp_config="$(mktemp)"
   if [[ "$CONFIG_POLICY" != "merge" || ! -s "$SERVER_CONF" ]]; then
-    write_fresh_server_config
+    write_fresh_server_config "$temp_config"
+    if ! run_sing_box check -c "$temp_config"; then
+      rm -f "$temp_config"
+      echo "错误：新配置未通过 sing-box 验证，现有配置保持不变" >&2
+      return 1
+    fi
+    install -m 600 "$temp_config" "$SERVER_CONF"
+    rm -f "$temp_config"
     return 0
   fi
 
   validate_existing_server_config
 
   selected_file="$(mktemp)"
-  temp_config="$(mktemp)"
   selected_inbounds_json > "$selected_file"
 
-  jq --slurpfile selected "$selected_file" '
+  if ! jq --slurpfile selected "$selected_file" '
     ($selected[0] | map(.tag)) as $selected_tags
     | .inbounds = (
         [
@@ -2804,7 +2882,17 @@ write_server_config() {
         else [{"type": "direct"}]
         end
       )
-  ' "$SERVER_CONF" > "$temp_config"
+  ' "$SERVER_CONF" > "$temp_config"; then
+    rm -f "$selected_file" "$temp_config"
+    echo "错误：合并 sing-box 配置失败，现有配置保持不变" >&2
+    return 1
+  fi
+
+  if ! run_sing_box check -c "$temp_config"; then
+    rm -f "$selected_file" "$temp_config"
+    echo "错误：合并后的配置未通过 sing-box 验证，现有配置保持不变" >&2
+    return 1
+  fi
 
   install -m 600 "$temp_config" "$SERVER_CONF"
   rm -f "$selected_file" "$temp_config"
@@ -3420,6 +3508,10 @@ main() {
   fi
   echo
 
+  if [[ "$CONFIG_POLICY" == "new" && -s "$SERVER_CONF" ]]; then
+    backup_existing_files "before-new-config"
+  fi
+
   install_dependencies
   validate_existing_server_config
   enable_bbr_and_fq
@@ -3438,6 +3530,11 @@ main() {
   if (( INSTALL_HY2 )); then
     prepare_certificate
     generate_hy2_secrets
+  fi
+
+  write_server_config
+
+  if (( INSTALL_HY2 )); then
     if [[ "$HY2_PORT_HOPPING" == "on" ]]; then
       write_port_hopping_helper
     else
@@ -3447,7 +3544,6 @@ main() {
     disable_hy2_port_hopping
   fi
 
-  write_server_config
   detect_server_ip
 
   if (( INSTALL_ANYTLS )); then
