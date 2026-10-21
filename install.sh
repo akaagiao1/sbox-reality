@@ -704,6 +704,213 @@ warp_register_credentials() {
   rm -rf "$temporary"
 }
 
+warp_rule_url() {
+  printf 'https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo-lite/geosite/%s.srs\n' "$1"
+}
+
+warp_probe_url() {
+  curl -fsSIL --retry 2 --retry-delay 2 \
+    --connect-timeout 10 --max-time 30 "$1" >/dev/null
+}
+
+warp_validate_rule_urls() {
+  local rules_json="$1"
+  local name url failed=0
+
+  if ! jq -e 'type == "array" and length > 0 and all(.[]; type == "string")' \
+    <<< "$rules_json" >/dev/null 2>&1; then
+    echo "错误：WARP 规则列表不是有效的 JSON 数组" >&2
+    return 1
+  fi
+
+  while IFS= read -r name; do
+    url="$(warp_rule_url "$name")"
+    if ! warp_probe_url "$url"; then
+      echo "错误：MetaCubeX geosite 规则不存在或无法访问：$name" >&2
+      failed=1
+    fi
+  done < <(jq -r '.[]' <<< "$rules_json")
+  (( failed == 0 ))
+}
+
+warp_current_rules() {
+  local config_file="$1"
+
+  jq -c '
+    [
+      .route.rule_set[]?
+      | select(
+          .type == "remote"
+          and .format == "binary"
+          and .download_detour == "sbox-warp-direct"
+          and (.tag | type == "string" and test("^sbox-warp-geosite-[a-z0-9_-]+$"))
+        )
+      | (.tag | sub("^sbox-warp-geosite-"; "")) as $name
+      | select(.url == ("https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo-lite/geosite/" + $name + ".srs"))
+      | $name
+    ]
+  ' "$config_file"
+}
+
+warp_validate_managed_ownership() {
+  local config_file="$1"
+
+  jq -e '
+    def managed_rule_set_tag:
+      type == "string" and test("^sbox-warp-geosite-[a-z0-9_-]+$");
+    def valid_managed_route:
+      .action == "route"
+      and .outbound == "sbox-warp-out"
+      and (.rule_set | type == "array" and length > 0 and all(.[]; managed_rule_set_tag))
+      and ((keys | sort) == ["action", "outbound", "rule_set"]);
+    def valid_managed_endpoint:
+      .type == "wireguard"
+      and .tag == "sbox-warp-out"
+      and .mtu == 1280
+      and (.address | type == "array" and length == 2)
+      and (.private_key | type == "string" and length == 44)
+      and (.peers | type == "array" and length == 1)
+      and .peers[0].address == "engage.cloudflareclient.com"
+      and .peers[0].port == 2408
+      and .peers[0].public_key == "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+      and .peers[0].allowed_ips == ["0.0.0.0/0", "::/0"]
+      and .peers[0].persistent_keepalive_interval == 30
+      and (.peers[0].reserved | type == "array" and length == 3);
+    def valid_managed_rule_set:
+      (.tag | sub("^sbox-warp-geosite-"; "")) as $name
+      | .type == "remote"
+        and .format == "binary"
+        and .download_detour == "sbox-warp-direct"
+        and .url == ("https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo-lite/geosite/" + $name + ".srs")
+        and ((keys | sort) == ["download_detour", "format", "tag", "type", "url"]);
+
+    ([.outbounds[]? | select(.tag == "sbox-warp-direct")] | length) <= 1
+    and all(.outbounds[]? | select(.tag == "sbox-warp-direct");
+      . == {type: "direct", tag: "sbox-warp-direct"})
+    and ([.endpoints[]? | select(.tag == "sbox-warp-out")] | length) <= 1
+    and all(.endpoints[]? | select(.tag == "sbox-warp-out"); valid_managed_endpoint)
+    and all(.route.rule_set[]? | select(.tag | managed_rule_set_tag); valid_managed_rule_set)
+    and ([.route.rules[]? | select(.outbound == "sbox-warp-out")] | length) <= 1
+    and all(.route.rules[]? | select(.outbound == "sbox-warp-out"); valid_managed_route)
+  ' "$config_file" >/dev/null 2>&1
+}
+
+warp_remove_config() {
+  local input_file="$1"
+  local output_file="$2"
+  local temporary
+
+  if ! jq -e . "$input_file" >/dev/null 2>&1; then
+    echo "错误：无法从无效 JSON 中移除 WARP 配置" >&2
+    return 1
+  fi
+  if ! warp_validate_managed_ownership "$input_file"; then
+    echo "错误：现有配置占用了 sbox-warp 受管 tag，且结构无法识别" >&2
+    return 1
+  fi
+
+  temporary="$(mktemp "${output_file}.tmp.XXXXXX")"
+  if ! jq '
+    def managed_route:
+      .action == "route" and .outbound == "sbox-warp-out"
+      and (.rule_set | type == "array" and length > 0
+        and all(.[]; type == "string" and startswith("sbox-warp-geosite-")));
+    .outbounds = [(.outbounds // [])[] | select((.tag // "") != "sbox-warp-direct")]
+    | .endpoints = [(.endpoints // [])[] | select((.tag // "") != "sbox-warp-out")]
+    | .route = (.route // {})
+    | .route.rule_set = [(.route.rule_set // [])[]
+        | select(((.tag // "") | startswith("sbox-warp-geosite-")) | not)]
+    | (.route.rules // []) as $rules
+    | .route.rules = [
+        range(0; ($rules | length)) as $index
+        | $rules[$index]
+        | select(
+            (managed_route | not)
+            and (
+              (. == {action: "sniff"})
+              and ($index + 1 < ($rules | length))
+              and ($rules[$index + 1] | managed_route)
+            | not)
+          )
+      ]
+  ' "$input_file" > "$temporary"; then
+    rm -f "$temporary"
+    return 1
+  fi
+  mv -f "$temporary" "$output_file"
+}
+
+warp_merge_config() {
+  local input_file="$1"
+  local credentials_file="$2"
+  local rules_json="$3"
+  local output_file="$4"
+  local stripped temporary
+
+  warp_validate_credentials "$credentials_file" || {
+    echo "错误：WARP 凭据文件无效" >&2
+    return 1
+  }
+  if ! jq -e 'type == "array" and length > 0 and all(.[]; type == "string" and test("^[a-z0-9_-]+$"))' \
+    <<< "$rules_json" >/dev/null 2>&1; then
+    echo "错误：WARP 规则列表无效" >&2
+    return 1
+  fi
+
+  stripped="$(mktemp)"
+  temporary="$(mktemp "${output_file}.tmp.XXXXXX")"
+  if ! warp_remove_config "$input_file" "$stripped"; then
+    rm -f "$stripped" "$temporary"
+    return 1
+  fi
+
+  if ! jq --slurpfile credentials "$credentials_file" --argjson rules "$rules_json" '
+    $credentials[0] as $credential
+    | ($rules | map("sbox-warp-geosite-" + .)) as $rule_tags
+    | .outbounds = ((.outbounds // []) + [{type: "direct", tag: "sbox-warp-direct"}])
+    | .endpoints = ((.endpoints // []) + [{
+        type: "wireguard",
+        tag: "sbox-warp-out",
+        mtu: $credential.mtu,
+        address: $credential.address,
+        private_key: $credential.private_key,
+        peers: [{
+          address: $credential.peer.address,
+          port: $credential.peer.port,
+          public_key: $credential.peer.public_key,
+          allowed_ips: $credential.peer.allowed_ips,
+          persistent_keepalive_interval: $credential.peer.persistent_keepalive_interval,
+          reserved: $credential.reserved
+        }]
+      }])
+    | .route = (.route // {})
+    | .route.rule_set = ((.route.rule_set // []) + [
+        $rules[] as $name
+        | {
+            type: "remote",
+            tag: ("sbox-warp-geosite-" + $name),
+            format: "binary",
+            url: ("https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo-lite/geosite/" + $name + ".srs"),
+            download_detour: "sbox-warp-direct"
+          }
+      ])
+    | .route.rules = ([
+        {action: "sniff"},
+        {rule_set: $rule_tags, action: "route", outbound: "sbox-warp-out"}
+      ] + (.route.rules // []))
+  ' "$stripped" > "$temporary"; then
+    rm -f "$stripped" "$temporary"
+    return 1
+  fi
+  rm -f "$stripped"
+
+  if ! jq -e . "$temporary" >/dev/null 2>&1; then
+    rm -f "$temporary"
+    return 1
+  fi
+  mv -f "$temporary" "$output_file"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -m|--mode|--install)

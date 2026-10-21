@@ -254,6 +254,174 @@ test_credentials() {
   PASS_COUNT=$(( PASS_COUNT + 1 ))
 }
 
+write_test_credentials() {
+  local destination="$1"
+  local response="$TEST_TMP/config-registration.json"
+  local key
+  key="$(head -c 32 /dev/zero | base64 | tr -d '\n')"
+  write_registration_response "$response"
+  bash -c '
+    script=$1; response=$2; key=$3; destination=$4
+    set --; source "$script"
+    warp_parse_registration_response "$response" "$key" "$key" "$destination"
+  ' _ "$INSTALL_SCRIPT" "$response" "$key" "$destination"
+}
+
+merge_warp_config() {
+  local input="$1"
+  local credentials="$2"
+  local rules="$3"
+  local output="$4"
+  bash -c '
+    script=$1; input=$2; credentials=$3; rules=$4; output=$5
+    set --; source "$script"
+    warp_merge_config "$input" "$credentials" "$rules" "$output"
+  ' _ "$INSTALL_SCRIPT" "$input" "$credentials" "$rules" "$output"
+}
+
+test_config() {
+  local base="$TEST_TMP/base.json"
+  local credentials="$TEST_TMP/config-credentials.json"
+  local merged="$TEST_TMP/merged.json"
+  local updated="$TEST_TMP/updated.json"
+  local removed="$TEST_TMP/removed.json"
+  local removed_twice="$TEST_TMP/removed-twice.json"
+  local current_rules
+
+  write_test_credentials "$credentials"
+  cat > "$base" <<'JSON'
+{
+  "log": {"level": "warn"},
+  "inbounds": [{"type": "mixed", "tag": "user-in", "listen": "127.0.0.1", "listen_port": 2081}],
+  "outbounds": [
+    {"type": "direct"},
+    {"type": "block", "tag": "user-block"}
+  ],
+  "endpoints": [{"type": "user-endpoint", "tag": "user-endpoint", "value": 7}],
+  "route": {
+    "rules": [{"ip_is_private": true, "action": "reject"}],
+    "final": "user-final",
+    "auto_detect_interface": true
+  },
+  "experimental": {"cache_file": {"enabled": true}}
+}
+JSON
+
+  assert_succeeds "youtube and netflix should merge into the existing config" \
+    merge_warp_config "$base" "$credentials" '["youtube","netflix"]' "$merged"
+
+  assert_succeeds "merged config should contain all managed objects" \
+    jq -e '
+      ([.outbounds[] | select(.tag == "sbox-warp-direct" and .type == "direct")] | length) == 1
+      and ([.endpoints[] | select(.tag == "sbox-warp-out" and .type == "wireguard")] | length) == 1
+      and ([.route.rule_set[] | select(.tag == "sbox-warp-geosite-youtube"
+        and .type == "remote" and .format == "binary"
+        and .download_detour == "sbox-warp-direct"
+        and .url == "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo-lite/geosite/youtube.srs")] | length) == 1
+      and ([.route.rule_set[] | select(.tag == "sbox-warp-geosite-netflix")] | length) == 1
+      and .route.rules[0] == {"action":"sniff"}
+      and .route.rules[1].action == "route"
+      and .route.rules[1].outbound == "sbox-warp-out"
+      and .route.rules[1].rule_set == ["sbox-warp-geosite-youtube", "sbox-warp-geosite-netflix"]
+      and .route.rules[2] == {"ip_is_private":true,"action":"reject"}
+    ' "$merged"
+
+  assert_succeeds "unmanaged configuration values should be preserved" \
+    jq -e --slurpfile base "$base" '
+      .log == $base[0].log
+      and .inbounds == $base[0].inbounds
+      and ([.outbounds[] | select((.tag // "") != "sbox-warp-direct")] == $base[0].outbounds)
+      and ([.endpoints[] | select((.tag // "") != "sbox-warp-out")] == $base[0].endpoints)
+      and .route.final == $base[0].route.final
+      and .route.auto_detect_interface == $base[0].route.auto_detect_interface
+      and .experimental == $base[0].experimental
+    ' "$merged"
+
+  current_rules="$(bash -c '
+    script=$1; config=$2; set --; source "$script"; warp_current_rules "$config"
+  ' _ "$INSTALL_SCRIPT" "$merged")"
+  assert_eq '["youtube","netflix"]' "$current_rules" \
+    "managed rule names should be extractable"
+
+  assert_succeeds "replacement should remove old managed rule sets" \
+    merge_warp_config "$merged" "$credentials" '["netflix"]' "$updated"
+  assert_succeeds "replacement should retain only netflix" \
+    jq -e '
+      ([.route.rule_set[] | select(.tag == "sbox-warp-geosite-youtube")] | length) == 0
+      and ([.route.rule_set[] | select(.tag == "sbox-warp-geosite-netflix")] | length) == 1
+      and .route.rules[1].rule_set == ["sbox-warp-geosite-netflix"]
+    ' "$updated"
+
+  assert_succeeds "warp removal should succeed" \
+    bash -c '
+      script=$1; input=$2; output=$3; set --; source "$script"
+      warp_remove_config "$input" "$output"
+    ' _ "$INSTALL_SCRIPT" "$updated" "$removed"
+  assert_succeeds "warp removal should delete only managed objects" \
+    jq -e --slurpfile base "$base" '
+      .outbounds == $base[0].outbounds
+      and .endpoints == $base[0].endpoints
+      and (.route.rule_set // []) == []
+      and .route.rules == $base[0].route.rules
+      and .route.final == $base[0].route.final
+      and .experimental == $base[0].experimental
+    ' "$removed"
+  assert_succeeds "warp removal should be idempotent" \
+    bash -c '
+      script=$1; input=$2; output=$3; set --; source "$script"
+      warp_remove_config "$input" "$output"
+    ' _ "$INSTALL_SCRIPT" "$removed" "$removed_twice"
+  assert_succeeds "second removal should not change JSON" \
+    bash -c 'diff -u <(jq -S . "$1") <(jq -S . "$2")' \
+      _ "$removed" "$removed_twice"
+
+  jq '.outbounds += [{"type":"block","tag":"sbox-warp-direct"}]' "$base" \
+    > "$TEST_TMP/conflict-outbound.json"
+  assert_fails "unexpected managed outbound collision should fail" \
+    merge_warp_config "$TEST_TMP/conflict-outbound.json" "$credentials" '["youtube"]' "$TEST_TMP/conflict-outbound-result.json"
+
+  jq '.endpoints += [{"type":"direct","tag":"sbox-warp-out"}]' "$base" \
+    > "$TEST_TMP/conflict-endpoint.json"
+  assert_fails "unexpected managed endpoint collision should fail" \
+    merge_warp_config "$TEST_TMP/conflict-endpoint.json" "$credentials" '["youtube"]' "$TEST_TMP/conflict-endpoint-result.json"
+
+  jq '.route.rule_set = [{"type":"local","tag":"sbox-warp-geosite-youtube","path":"/tmp/user.srs"}]' "$base" \
+    > "$TEST_TMP/conflict-ruleset.json"
+  assert_fails "unexpected managed rule-set collision should fail" \
+    merge_warp_config "$TEST_TMP/conflict-ruleset.json" "$credentials" '["youtube"]' "$TEST_TMP/conflict-ruleset-result.json"
+
+  assert_fails "all rule URLs should be probed and one missing rule should fail" \
+    bash -c '
+      script=$1; capture=$2; set --; source "$script"
+      warp_probe_url() {
+        printf "%s\n" "$1" >> "$capture"
+        [[ "$1" != *netflix.srs ]]
+      }
+      warp_validate_rule_urls "[\"youtube\",\"netflix\"]"
+    ' _ "$INSTALL_SCRIPT" "$TEST_TMP/probed-urls.txt"
+  assert_eq '2' "$(wc -l < "$TEST_TMP/probed-urls.txt" | tr -d ' ')" \
+    "URL validation should check every selected rule"
+  assert_succeeds "URL validation should build exact MetaCubeX URLs" \
+    bash -c '
+      grep -Fx "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo-lite/geosite/youtube.srs" "$1"
+      grep -Fx "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo-lite/geosite/netflix.srs" "$1"
+    ' _ "$TEST_TMP/probed-urls.txt"
+
+  if [[ -x /workspace/.sbox-dev/bin/sing-box ]]; then
+    cat > "$TEST_TMP/schema-base.json" <<'JSON'
+{
+  "inbounds": [{"type":"mixed","tag":"test-in","listen":"127.0.0.1","listen_port":2080}],
+  "outbounds": [{"type":"direct"}]
+}
+JSON
+    assert_succeeds "generated WARP config should pass sing-box schema validation" \
+      merge_warp_config "$TEST_TMP/schema-base.json" "$credentials" '["youtube"]' "$TEST_TMP/schema-merged.json"
+    assert_succeeds "sing-box should accept the generated WARP config" \
+      /workspace/.sbox-dev/bin/sing-box check -c "$TEST_TMP/schema-merged.json"
+    cp "$TEST_TMP/schema-merged.json" /tmp/sbox-warp-generated-test.json
+  fi
+}
+
 case "$TEST_GROUP" in
   normalization)
     test_normalization
@@ -261,11 +429,15 @@ case "$TEST_GROUP" in
   credentials)
     test_credentials
     ;;
+  config)
+    test_config
+    ;;
   all)
     test_normalization
     test_credentials
+    test_config
     ;;
-  config|transaction|integration)
+  transaction|integration)
     fail "test group not implemented yet: $TEST_GROUP"
     ;;
   *)
