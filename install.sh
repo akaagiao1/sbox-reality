@@ -89,6 +89,19 @@ COMBINED_INFO="$OUTPUT_DIR/all-info.txt"
 BACKUP_ROOT="/root/sbox-reality-backups"
 BACKUP_MARKER=".sbox-reality-backup"
 BBR_SYSCTL_CONF="/etc/sysctl.d/99-sbox-reality-bbr.conf"
+SBOX_STATE_DIR="/etc/sbox-reality"
+NODES_FILE="$SBOX_STATE_DIR/nodes.json"
+TRAFFIC_STATE="$SBOX_STATE_DIR/traffic/state.json"
+CLIENTS_ROOT="/root/sbox-reality/clients"
+TRAFFIC_SERVICE="/etc/systemd/system/sbox-traffic.service"
+TRAFFIC_TIMER="/etc/systemd/system/sbox-traffic.timer"
+OPENRC_TRAFFIC_SCRIPT="/etc/init.d/sbox-traffic"
+NOTIFY_ENV="$SBOX_STATE_DIR/notify.env"
+SERVER_HOST_FILE="$SBOX_STATE_DIR/server-host"
+MANAGER_NODE_BIN="/usr/local/sbin/sbox-node"
+MANAGER_TRAFFIC_BIN="/usr/local/sbin/sbox-traffic"
+MANAGEMENT_MODE=""
+MANAGEMENT_ARGS=()
 
 # Path overrides are accepted only by the isolated test harness. Production
 # runs always use the fixed system locations above.
@@ -97,6 +110,12 @@ if [[ "${SBOX_REALITY_TEST_MODE:-0}" == "1" ]]; then
   WARP_CREDENTIALS_FILE="${WARP_CREDENTIALS_FILE_OVERRIDE:-$WARP_CREDENTIALS_FILE}"
   BACKUP_ROOT="${BACKUP_ROOT_OVERRIDE:-$BACKUP_ROOT}"
   OUTPUT_DIR="${OUTPUT_DIR_OVERRIDE:-$OUTPUT_DIR}"
+  SBOX_STATE_DIR="${SBOX_STATE_DIR_OVERRIDE:-$SBOX_STATE_DIR}"
+  NODES_FILE="$SBOX_STATE_DIR/nodes.json"
+  TRAFFIC_STATE="$SBOX_STATE_DIR/traffic/state.json"
+  NOTIFY_ENV="$SBOX_STATE_DIR/notify.env"
+  SERVER_HOST_FILE="$SBOX_STATE_DIR/server-host"
+  CLIENTS_ROOT="${CLIENTS_ROOT_OVERRIDE:-$CLIENTS_ROOT}"
   ANYTLS_CLIENT_OUT="$OUTPUT_DIR/anytls-sing-box.json"
   ANYTLS_URL_FILE="$OUTPUT_DIR/anytls-url.txt"
   ANYTLS_SURGE_CONF="$OUTPUT_DIR/anytls-surge.conf"
@@ -148,6 +167,25 @@ NORMALIZED_HOP_PORTS=""
 SERVER_PORTS_JSON=""
 SERVER_IP=""
 SERVER_URL_HOST=""
+
+case "$(basename -- "$0")" in
+  sbox-node)
+    MANAGEMENT_MODE="node"
+    MANAGEMENT_ARGS=("$@")
+    set --
+    ;;
+  sbox-traffic)
+    MANAGEMENT_MODE="traffic"
+    MANAGEMENT_ARGS=("$@")
+    set --
+    ;;
+esac
+if [[ -z "$MANAGEMENT_MODE" && $# -gt 0 && ( "$1" == "node" || "$1" == "traffic" ) ]]; then
+  MANAGEMENT_MODE="$1"
+  shift
+  MANAGEMENT_ARGS=("$@")
+  set --
+fi
 
 ANYTLS_PRIVATE_KEY=""
 ANYTLS_PUBLIC_KEY=""
@@ -359,6 +397,20 @@ restore_install_service_state() {
   fi
 }
 
+restore_manager_services() {
+  if [[ "$SERVICE_MANAGER" == "systemd" ]]; then
+    [[ -f "$TRAFFIC_SERVICE" && -f "$TRAFFIC_TIMER" ]] || return 0
+    systemctl daemon-reload
+    systemctl enable --now sbox-traffic.timer
+  else
+    [[ -f "$OPENRC_TRAFFIC_SCRIPT" ]] || return 0
+    chmod 0755 "$OPENRC_TRAFFIC_SCRIPT"
+    rc-update add sbox-traffic default >/dev/null 2>&1 || true
+    rc-service sbox-traffic restart >/dev/null 2>&1 \
+      || rc-service sbox-traffic start >/dev/null 2>&1 || true
+  fi
+}
+
 install_jq() {
   if [[ "$PLATFORM" == "alpine" ]]; then
     apk add --no-cache jq
@@ -380,6 +432,9 @@ purge_sing_box_package() {
 }
 
 cleanup_all_sing_box_configs() {
+  if [[ -x "$MANAGER_NODE_BIN" ]]; then
+    "$MANAGER_NODE_BIN" cleanup --purge >/dev/null 2>&1 || true
+  fi
   disable_hy2_port_hopping
   service_disable
   rm -f "$WARP_CREDENTIALS_FILE"
@@ -389,6 +444,9 @@ cleanup_all_sing_box_configs() {
     /var/lib/sing-box \
     /var/log/sing-box \
     "$OUTPUT_DIR"
+  rm -rf "$SBOX_STATE_DIR" "$CLIENTS_ROOT"
+  rm -f "$TRAFFIC_SERVICE" "$TRAFFIC_TIMER" "$OPENRC_TRAFFIC_SCRIPT" \
+    "$MANAGER_NODE_BIN" "$MANAGER_TRAFFIC_BIN"
   rm -f "$BBR_SYSCTL_CONF"
 }
 
@@ -2805,6 +2863,14 @@ backup_existing_files() {
     "/usr/local/etc/sing-box"
     "/opt/sing-box"
     "$OUTPUT_DIR"
+    "$NODES_FILE"
+    "$TRAFFIC_STATE"
+    "$NOTIFY_ENV"
+    "$SERVER_HOST_FILE"
+    "$CLIENTS_ROOT"
+    "$TRAFFIC_SERVICE"
+    "$TRAFFIC_TIMER"
+    "$OPENRC_TRAFFIC_SCRIPT"
   )
 
   backup_dir="${BACKUP_ROOT}/${reason}-$(date +%Y%m%d-%H%M%S)-$$"
@@ -2959,6 +3025,20 @@ restore_file_from_backup() {
   cp -p "$source" "$destination"
 }
 
+restore_directory_from_backup() {
+  local backup_dir="$1"
+  local destination="$2"
+  local directory_name source
+
+  directory_name="external-${destination#/}"
+  directory_name="${directory_name//\//__}"
+  source="${backup_dir}/${directory_name}"
+  [[ -d "$source" ]] || return 0
+  rm -rf -- "$destination"
+  mkdir -p "$(dirname "$destination")"
+  cp -a "$source" "$destination"
+}
+
 validate_backup_tls_files() {
   local backup_dir="$1"
   local backup_config="$2"
@@ -3021,6 +3101,13 @@ restore_latest_backup() {
     "$OPENRC_PORT_SERVICE"
     "$DEFAULT_CERT_PATH"
     "$DEFAULT_KEY_PATH"
+    "$NODES_FILE"
+    "$TRAFFIC_STATE"
+    "$NOTIFY_ENV"
+    "$SERVER_HOST_FILE"
+    "$TRAFFIC_SERVICE"
+    "$TRAFFIC_TIMER"
+    "$OPENRC_TRAFFIC_SCRIPT"
   )
   local destination
 
@@ -3048,6 +3135,7 @@ restore_latest_backup() {
     exit 1
   fi
   install_sing_box
+  install_manager_tool
 
   service_stop
   disable_hy2_port_hopping
@@ -3058,6 +3146,8 @@ restore_latest_backup() {
   for destination in "${destinations[@]}"; do
     restore_file_from_backup "$LATEST_BACKUP_DIR" "$destination"
   done
+  restore_directory_from_backup "$LATEST_BACKUP_DIR" "$CLIENTS_ROOT"
+  restore_manager_services
 
   if [[ -f "$PORT_HELPER" ]]; then
     chmod +x "$PORT_HELPER"
@@ -3093,6 +3183,7 @@ restore_latest_backup() {
 reuse_existing_config() {
   echo "保留现有配置；新模式和协议选项不会生效。"
   install_dependencies
+  install_manager_tool
 
   run_sing_box check -c "$SERVER_CONF"
   service_reload
@@ -3186,6 +3277,27 @@ remove_direct_files() {
   rm -f "$DIRECT_INFO"
 }
 
+remove_managed_nodes_for_scope() {
+  local scope="$1" id
+  [[ -x "$MANAGER_NODE_BIN" && -s "$NODES_FILE" ]] || return 0
+  while IFS= read -r id; do
+    [[ -n "$id" ]] || continue
+    "$MANAGER_NODE_BIN" node remove "$id" >/dev/null
+  done < <(
+    jq -r --arg scope "$scope" '
+      .nodes[] |
+      select(
+        ($scope == "anytls" and .protocol == "anytls") or
+        ($scope == "vless" and .protocol == "vless") or
+        ($scope == "hy2" and .protocol == "hy2") or
+        ($scope == "snell5" and .protocol == "snell5") or
+        ($scope == "snell6" and .protocol == "snell6") or
+        ($scope == "direct" and .protocol == "direct")
+      ) | .id
+    ' "$NODES_FILE"
+  )
+}
+
 uninstall_selected() {
   local remove_anytls=false
   local remove_vless=false
@@ -3233,6 +3345,10 @@ uninstall_selected() {
   if [[ -n "$LAST_BACKUP_DIR" ]]; then
     prune_backups_except "$LAST_BACKUP_DIR"
     backup_status="$LAST_BACKUP_DIR"
+  fi
+
+  if [[ "$UNINSTALL_SCOPE" != "all" ]]; then
+    remove_managed_nodes_for_scope "$UNINSTALL_SCOPE"
   fi
 
   if [[ -s "$SERVER_CONF" ]]; then
@@ -3968,13 +4084,13 @@ install_sing_box_alpine() {
 install_base_dependencies() {
   echo "正在安装基础依赖……"
   if [[ "$PLATFORM" == "alpine" ]]; then
-    apk add --no-cache bash curl git openssl ca-certificates iproute2 coreutils jq nftables iptables openrc
+    apk add --no-cache bash curl git openssl ca-certificates iproute2 coreutils jq nftables iptables conntrack-tools openrc
   else
     apt update
     DEBIAN_FRONTEND=noninteractive apt install -y \
       -o Dpkg::Options::="--force-confdef" \
       -o Dpkg::Options::="--force-confold" \
-      curl git openssl ca-certificates iproute2 coreutils jq nftables iptables procps
+      curl git openssl ca-certificates iproute2 coreutils jq nftables iptables conntrack procps
   fi
 }
 
@@ -4024,6 +4140,36 @@ install_sing_box() {
 install_dependencies() {
   install_base_dependencies
   install_sing_box
+}
+
+install_manager_tool() {
+  local source_file temp_file install_ref expected_sha256
+
+  [[ "${SBOX_REALITY_TEST_MODE:-0}" == "1" ]] && return 0
+  source_file="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P)/sbox-manager.sh"
+  if [[ -f "$source_file" ]]; then
+    install -m 0755 "$source_file" "$MANAGER_NODE_BIN"
+  else
+    install_ref="${SBOX_REALITY_INSTALL_REF:-${SBOX_REALITY_REF:-main}}"
+    [[ "$install_ref" =~ ^[A-Za-z0-9._/-]+$ ]] \
+      || { echo "错误：SBOX_REALITY_INSTALL_REF 格式无效" >&2; return 1; }
+    temp_file="$(mktemp)"
+    curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors \
+      --connect-timeout 10 --max-time 60 \
+      -o "$temp_file" \
+      "https://raw.githubusercontent.com/akaagiao1/sbox-reality/${install_ref}/sbox-manager.sh" \
+      || { rm -f "$temp_file"; return 1; }
+    expected_sha256="${SBOX_MANAGER_SHA256:-}"
+    if [[ -n "$expected_sha256" ]]; then
+      printf '%s  %s\n' "$expected_sha256" "$temp_file" | sha256sum -c - >/dev/null \
+        || { rm -f "$temp_file"; echo "错误：sbox-manager.sh SHA-256 校验失败" >&2; return 1; }
+    fi
+    bash -n "$temp_file" || { rm -f "$temp_file"; return 1; }
+    install -m 0755 "$temp_file" "$MANAGER_NODE_BIN"
+    rm -f "$temp_file"
+  fi
+  ln -sfn "$MANAGER_NODE_BIN" "$MANAGER_TRAFFIC_BIN"
+  echo "节点管理命令已安装：$MANAGER_NODE_BIN"
 }
 
 generate_anytls_secrets() {
@@ -5068,6 +5214,14 @@ print_summary() {
 }
 
 main() {
+  if [[ -n "$MANAGEMENT_MODE" ]]; then
+    if [[ -x "$MANAGER_NODE_BIN" ]]; then
+      exec "$MANAGER_NODE_BIN" "$MANAGEMENT_MODE" "${MANAGEMENT_ARGS[@]}"
+    fi
+    echo "错误：节点管理命令尚未安装，请先运行 install.sh 完成安装" >&2
+    exit 1
+  fi
+
   choose_mode
   normalize_mode
   choose_uninstall_scope
@@ -5180,6 +5334,7 @@ main() {
   fi
 
   install_sing_box
+  install_manager_tool
   warp_prepare_install_state
   enable_bbr_and_fq
   verify_snell_support

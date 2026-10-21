@@ -28,7 +28,9 @@ jobs:
           bash -n install-anytls-reality.sh
           bash -n install-hysteria2-surge.sh
           bash -n tests/test-warp-routing.sh
-          shellcheck -S warning install.sh reality.sh install-anytls-reality.sh install-hysteria2-surge.sh tests/test-warp-routing.sh
+          bash -n sbox-manager.sh
+          bash -n tests/test-sbox-manager.sh
+          shellcheck -S warning install.sh sbox-manager.sh reality.sh install-anytls-reality.sh install-hysteria2-surge.sh tests/test-warp-routing.sh tests/test-sbox-manager.sh
 
       - name: Resolve latest sing-box Alpha
         id: alpha
@@ -103,4 +105,6 @@ jobs:
           "$binary" version
 
       - name: Run tests
-        run: bash tests/test-warp-routing.sh all
+        run: |
+          bash tests/test-warp-routing.sh all
+          bash tests/test-sbox-manager.sh

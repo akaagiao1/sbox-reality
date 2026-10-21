@@ -12,6 +12,9 @@
 - **Direct 固定目标中转**
 - **Cloudflare WARP 按 geosite 规则分流**
 - **同时安装多个入站到同一个 sing-box 配置**
+- **多客户独立节点：同一协议可创建多个端口和凭据**
+- **按节点流量额度、月度重置和到期自动暂停**
+- **Telegram 额度与到期提醒**
 - **默认开启 BBR + fq，并写入持久化 sysctl 配置**
 - **按协议卸载、保留配置重装或生成全新配置**
 
@@ -221,6 +224,177 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 生成的 Snell v5/v6 节点默认开启 TCP Fast Open 和连接复用：Surge 使用 `tfo=true,reuse=true`，sing-box 客户端使用 `tcp_fast_open: true`、`reuse: true`，服务端同时开启 TCP Fast Open。约定格式 URL 也携带 `tfo=true&reuse=true`；导入支持情况取决于客户端。
 
 所有客户端文件统一保存在 `/root/sing-box/`。sing-box 的 Snell v5 不包含官方 v5 QUIC Proxy，Surge 中的普通 TCP Snell 可以正常使用。
+
+---
+
+## 多客户节点、流量和到期管理
+
+除单协议安装菜单外，仓库提供 `sbox-manager.sh` 作为多租户节点管理器。它允许同一个 sing-box 进程运行多个 Snell、AnyTLS、VLESS、Hysteria2 或 Direct 入站，每个客户节点有独立端口、凭据、客户端文件、流量额度和到期时间。
+
+先安装或更新一次统一安装脚本，管理命令会安装到：
+
+```text
+/usr/local/sbin/sbox-node
+/usr/local/sbin/sbox-traffic
+```
+
+也可以直接安装仓库中的管理脚本：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/sbox-manager.sh \
+  -o /tmp/sbox-manager.sh
+bash -n /tmp/sbox-manager.sh
+bash /tmp/sbox-manager.sh install
+```
+
+### 创建多个客户节点
+
+```bash
+# 客户A，Snell v5，独立端口、PSK、100GB/月
+sbox-node node add cust-a snell5 \
+  --customer cust-a \
+  --port 24001 \
+  --quota 100G \
+  --reset-day 1 \
+  --expires 2026-12-31
+
+# 客户B，Snell v6，独立节点
+sbox-node node add cust-b snell6 \
+  --customer cust-b \
+  --port 24002 \
+  --quota 50G \
+  --reset-day 15 \
+  --expires 2026-11-30
+
+# 客户C，AnyTLS + REALITY
+sbox-node node add cust-c anytls \
+  --customer cust-c \
+  --port auto \
+  --quota 200G \
+  --expires 2027-01-31
+
+# 客户D，VLESS + REALITY
+sbox-node node add cust-d vless \
+  --customer cust-d \
+  --port auto \
+  --quota 200G \
+  --expires 2027-01-31
+
+# 客户E，Hysteria2
+sbox-node node add cust-e hy2 \
+  --customer cust-e \
+  --port auto \
+  --quota 500G \
+  --expires 2027-01-31
+
+# Direct 固定目标中转
+sbox-node node add cust-f direct \
+  --customer cust-f \
+  --port auto \
+  --target 1.1.1.1 \
+  --target-port 53
+```
+
+查看和管理：
+
+```bash
+sbox-node node list
+sbox-node node show cust-a
+sbox-node node clients cust-a
+sbox-node node port cust-a 24011
+sbox-node node disable cust-a
+sbox-node node enable cust-a
+sbox-node node remove cust-a
+```
+
+客户文件单独保存，避免把一个客户的凭据发给另一个客户：
+
+```text
+/root/sbox-reality/clients/<节点ID>/
+  sing-box.json
+  url.txt
+  surge.conf
+  info.txt
+```
+
+其中 Hysteria2 节点的证书和私钥也保存在该客户目录中。
+
+### 修改额度、重置和到期时间
+
+```bash
+sbox-node traffic set cust-a --quota 200G --reset-day 1
+sbox-node traffic set cust-a --expires 2027-03-31
+sbox-node traffic show
+sbox-node traffic show cust-a
+sbox-node traffic reset cust-a
+sbox-node traffic pause cust-a
+sbox-node traffic resume cust-a
+sbox-node traffic unset cust-a
+```
+
+流量统计和限制按节点端口单独执行，使用专用 `SBOX_TRF` iptables/ip6tables 计数链。额度用完或到期时，只拒绝目标节点端口并清理该端口已建立连接，不重启 sing-box，不影响其他客户节点和 WARP。
+
+限制状态保存在：
+
+```text
+/etc/sbox-reality/nodes.json
+/etc/sbox-reality/traffic/state.json
+```
+
+每月重置日支持 `1-28`。建议按“上行 + 下行总流量”计费，这也是当前实现的统计方式。
+
+### Telegram 通知
+
+保存 Bot Token 和一个或多个 Chat ID：
+
+```bash
+sbox-node notify setup '123456789:AAExampleToken' '123456789,-1001234567890'
+sbox-node notify test
+```
+
+通知配置保存在权限为 `600` 的：
+
+```text
+/etc/sbox-reality/notify.env
+```
+
+私聊时先给 Bot 发送 `/start`；群通知需要先把 Bot 加入群，并把群 Chat ID 填入配置。多个 Chat ID 用英文逗号分隔。
+
+自动通知包括：
+
+- 流量达到 80%
+- 流量额度用完、节点暂停
+- 到期前 7 天、3 天、1 天
+- 节点到期、节点暂停
+- 月度额度重置或续期后恢复
+
+到期和流量检查在 systemd 环境每分钟运行一次；Alpine/OpenRC 使用后台检查服务。通知发送失败不会阻止节点暂停或恢复。
+
+### 导入已有节点
+
+已有旧版脚本生成节点可以先导入管理状态：
+
+```bash
+sbox-node node migrate
+```
+
+会识别 `snell5-in`、`snell6-in`、`anytls-in`、`vless-in`、`hy2-in` 和 `direct-in`，并转换为默认客户节点。REALITY 节点的公钥无法从私钥单独重建，迁移时不会伪造客户端密钥，原有 `/root/sing-box/` 客户端文件继续有效。新客户节点会生成完整的新客户端文件。
+
+### 卸载
+
+仅移除流量、到期检查和管理状态，不删除 sing-box：
+
+```bash
+sbox-node cleanup
+```
+
+完整清除管理命令、状态和客户端目录：
+
+```bash
+sbox-node cleanup --purge
+```
+
+统一脚本的 `--uninstall all` 也会清理这些资源。
 
 ---
 
@@ -726,7 +900,9 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 
 ```bash
 bash tests/test-warp-routing.sh all
-shellcheck -S warning install.sh reality.sh install-*.sh tests/test-warp-routing.sh
+bash tests/test-sbox-manager.sh
+shellcheck -S warning install.sh sbox-manager.sh reality.sh install-*.sh \
+  tests/test-warp-routing.sh tests/test-sbox-manager.sh
 ```
 
 设置 `SING_BOX_TEST_BIN=/path/to/sing-box` 后，测试还会执行当前 Alpha 二进制的配置 schema 和规则集启动验证。GitHub Actions 会自动下载最新 Alpha 并运行这些检查。
