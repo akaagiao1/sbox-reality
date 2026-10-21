@@ -494,6 +494,216 @@ warp_validate_cli() {
   fi
 }
 
+warp_decode_base64() {
+  local value="$1"
+  local destination="$2"
+
+  if printf '%s' "$value" | base64 -d > "$destination" 2>/dev/null; then
+    return 0
+  fi
+  printf '%s' "$value" | base64 -D > "$destination" 2>/dev/null
+}
+
+warp_validate_key() {
+  local key="$1"
+  local decoded
+
+  [[ ${#key} -eq 44 ]] || return 1
+  decoded="$(mktemp)"
+  if ! warp_decode_base64 "$key" "$decoded" \
+    || [[ "$(wc -c < "$decoded" | tr -d ' ')" != "32" ]]; then
+    rm -f "$decoded"
+    return 1
+  fi
+  rm -f "$decoded"
+}
+
+warp_validate_credentials() {
+  local credential_file="$1"
+  local private_key public_key
+
+  [[ -s "$credential_file" ]] || return 1
+  if ! jq -e '
+    .schema == 1
+    and (.private_key | type == "string")
+    and (.public_key | type == "string")
+    and (.address | type == "array" and length == 2)
+    and (.address[0] | type == "string" and endswith("/32"))
+    and (.address[1] | type == "string" and endswith("/128"))
+    and (.reserved | type == "array" and length == 3)
+    and all(.reserved[]; type == "number" and floor == . and . >= 0 and . <= 255)
+    and .mtu == 1280
+    and .peer.address == "engage.cloudflareclient.com"
+    and .peer.port == 2408
+    and .peer.public_key == "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+    and .peer.allowed_ips == ["0.0.0.0/0", "::/0"]
+    and .peer.persistent_keepalive_interval == 30
+  ' "$credential_file" >/dev/null 2>&1; then
+    return 1
+  fi
+
+  private_key="$(jq -r '.private_key' "$credential_file")"
+  public_key="$(jq -r '.public_key' "$credential_file")"
+  warp_validate_key "$private_key" && warp_validate_key "$public_key"
+}
+
+warp_parse_registration_response() {
+  local response_file="$1"
+  local private_key="$2"
+  local public_key="$3"
+  local destination="$4"
+  local v4 v6 client_id decoded reserved temporary
+
+  warp_validate_key "$private_key" || {
+    echo "错误：WARP X25519 私钥格式无效" >&2
+    return 1
+  }
+  warp_validate_key "$public_key" || {
+    echo "错误：WARP X25519 公钥格式无效" >&2
+    return 1
+  }
+
+  v4="$(jq -er '.config.interface.addresses.v4 | select(type == "string" and length > 0)' "$response_file" 2>/dev/null)" || {
+    echo "错误：Cloudflare 注册响应缺少 IPv4 地址" >&2
+    return 1
+  }
+  v6="$(jq -er '.config.interface.addresses.v6 | select(type == "string" and length > 0)' "$response_file" 2>/dev/null)" || {
+    echo "错误：Cloudflare 注册响应缺少 IPv6 地址" >&2
+    return 1
+  }
+  client_id="$(jq -er '.config.client_id | select(type == "string" and length > 0)' "$response_file" 2>/dev/null)" || {
+    echo "错误：Cloudflare 注册响应缺少 client_id" >&2
+    return 1
+  }
+
+  decoded="$(mktemp)"
+  if ! warp_decode_base64 "$client_id" "$decoded" \
+    || [[ "$(wc -c < "$decoded" | tr -d ' ')" != "3" ]]; then
+    rm -f "$decoded"
+    echo "错误：Cloudflare client_id 必须解码为三个 reserved 字节" >&2
+    return 1
+  fi
+  reserved="$(od -An -tu1 "$decoded" | awk 'NF {$1=$1; gsub(/ /,","); print "["$0"]"}')"
+  rm -f "$decoded"
+
+  temporary="$(mktemp "${destination}.tmp.XXXXXX")"
+  if ! jq -n \
+    --arg private_key "$private_key" \
+    --arg public_key "$public_key" \
+    --arg v4 "${v4%/*}/32" \
+    --arg v6 "${v6%/*}/128" \
+    --argjson reserved "$reserved" '
+      {
+        schema: 1,
+        private_key: $private_key,
+        public_key: $public_key,
+        address: [$v4, $v6],
+        reserved: $reserved,
+        mtu: 1280,
+        peer: {
+          address: "engage.cloudflareclient.com",
+          port: 2408,
+          public_key: "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=",
+          allowed_ips: ["0.0.0.0/0", "::/0"],
+          persistent_keepalive_interval: 30
+        }
+      }
+    ' > "$temporary"; then
+    rm -f "$temporary"
+    return 1
+  fi
+
+  if ! warp_validate_credentials "$temporary"; then
+    rm -f "$temporary"
+    echo "错误：生成的 WARP 凭据未通过校验" >&2
+    return 1
+  fi
+  mv -f "$temporary" "$destination"
+}
+
+warp_generate_keypair() {
+  local temporary private_pem private_der public_der private_key public_key
+
+  temporary="$(mktemp -d)"
+  private_pem="$temporary/private.pem"
+  private_der="$temporary/private.der"
+  public_der="$temporary/public.der"
+
+  if ! openssl genpkey -algorithm X25519 -out "$private_pem" 2>/dev/null \
+    || ! openssl pkey -in "$private_pem" -outform DER -out "$private_der" 2>/dev/null \
+    || ! openssl pkey -in "$private_pem" -pubout -outform DER -out "$public_der" 2>/dev/null; then
+    rm -rf "$temporary"
+    echo "错误：当前 OpenSSL 无法生成 X25519 密钥" >&2
+    return 1
+  fi
+
+  private_key="$(tail -c 32 "$private_der" | base64 | tr -d '\n')"
+  public_key="$(tail -c 32 "$public_der" | base64 | tr -d '\n')"
+  rm -rf "$temporary"
+
+  warp_validate_key "$private_key" && warp_validate_key "$public_key" || return 1
+  jq -nc --arg private_key "$private_key" --arg public_key "$public_key" \
+    '{private_key: $private_key, public_key: $public_key}'
+}
+
+warp_post_registration() {
+  local public_key="$1"
+  local response_file="$2"
+  local random_hex serial_number payload http_code
+
+  random_hex="$(openssl rand -hex 16)"
+  serial_number="${random_hex:0:8}-${random_hex:8:4}-${random_hex:12:4}-${random_hex:16:4}-${random_hex:20:12}"
+  payload="$(jq -nc \
+    --arg key "$public_key" \
+    --arg tos "$(date -u +'%Y-%m-%dT%H:%M:%S.000Z')" \
+    --arg serial "$serial_number" \
+    '{key: $key, install_id: "", fcm_token: "", tos: $tos, model: "Linux", serial_number: $serial}')"
+
+  if ! http_code="$(curl --silent --show-error --location \
+    --connect-timeout 10 --max-time 30 --retry 2 --retry-delay 2 \
+    --output "$response_file" --write-out '%{http_code}' \
+    --request POST 'https://api.cloudflareclient.com/v0a2158/reg' \
+    --header 'CF-Client-Version: a-6.11-2223' \
+    --header 'Content-Type: application/json' \
+    --data "$payload")"; then
+    echo "错误：无法连接 Cloudflare WARP 注册接口" >&2
+    return 1
+  fi
+
+  if [[ "$http_code" != 2* ]]; then
+    echo "错误：Cloudflare WARP 注册失败（HTTP $http_code）" >&2
+    return 1
+  fi
+}
+
+warp_register_credentials() {
+  local destination="$1"
+  local temporary keypair response_file private_key public_key
+
+  temporary="$(mktemp -d)"
+  response_file="$temporary/response.json"
+  if ! keypair="$(warp_generate_keypair)"; then
+    rm -rf "$temporary"
+    return 1
+  fi
+  private_key="$(jq -er '.private_key' <<< "$keypair")" || {
+    rm -rf "$temporary"
+    return 1
+  }
+  public_key="$(jq -er '.public_key' <<< "$keypair")" || {
+    rm -rf "$temporary"
+    return 1
+  }
+
+  if ! warp_post_registration "$public_key" "$response_file" \
+    || ! warp_parse_registration_response \
+      "$response_file" "$private_key" "$public_key" "$destination"; then
+    rm -rf "$temporary"
+    return 1
+  fi
+  rm -rf "$temporary"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -m|--mode|--install)
