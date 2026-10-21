@@ -726,6 +726,198 @@ cmd_node_clients() {
   info "客户端文件已生成：$(client_dir_for "$id")"
 }
 
+select_node_interactive() {
+  local purpose="${1:-选择节点}" id selected index=0
+  local -a ids
+  while IFS= read -r id; do
+    [[ -n "$id" ]] || continue
+    ids+=("$id")
+    index=$(( index + 1 ))
+    printf '  %2d) %s\n' "$index" "$id"
+  done < <(jq -r '.nodes[].id' "$NODES_FILE")
+  (( index > 0 )) || { warn "当前没有客户节点"; return 1; }
+  while true; do
+    read -rp "$purpose（0=取消）：" selected
+    [[ "$selected" == "0" ]] && return 1
+    if [[ "$selected" =~ ^[0-9]+$ ]] \
+      && (( selected >= 1 && selected <= ${#ids[@]} )); then
+      SELECTED_NODE="${ids[$((selected - 1))]}"
+      return 0
+    fi
+    echo "请输入有效序号"
+  done
+}
+
+interactive_add_node() {
+  local customer protocol protocol_choice node_id port quota reset_day expires answer
+  local -a args
+
+  if [[ ! -t 0 && "${SBOX_MANAGER_TEST_MODE:-0}" != "1" ]]; then
+    die "交互式添加需要终端；非交互模式请使用 node add 参数"
+  fi
+  echo
+  echo "添加客户节点"
+  while true; do
+    read -rp "客户 ID（字母、数字、点、_、-）：" customer
+    validate_id "$customer" && break
+    echo "客户 ID 格式无效"
+  done
+  echo "协议："
+  echo "  1) Snell v5"
+  echo "  2) Snell v6"
+  echo "  3) AnyTLS + REALITY"
+  echo "  4) VLESS + REALITY"
+  echo "  5) Hysteria2"
+  echo "  6) Direct 固定中转"
+  while true; do
+    read -rp "选择协议 [1-6]：" protocol_choice
+    case "$protocol_choice" in
+      1) protocol=snell5; break ;;
+      2) protocol=snell6; break ;;
+      3) protocol=anytls; break ;;
+      4) protocol=vless; break ;;
+      5) protocol=hy2; break ;;
+      6) protocol=direct; break ;;
+      *) echo "请输入 1-6" ;;
+    esac
+  done
+  read -rp "节点 ID [${customer}-${protocol}]：" node_id
+  node_id="${node_id:-${customer}-${protocol}}"
+  validate_id "$node_id" || die "节点 ID 格式无效"
+  read -rp "监听端口 [auto]：" port
+  port="${port:-auto}"
+  read -rp "每月流量额度 [0=不限，例如 100G]：" quota
+  quota="${quota:-0}"
+  read -rp "每月重置日 [1-28，默认 1]：" reset_day
+  reset_day="${reset_day:-1}"
+  read -rp "设置到期时间？[Y/n]：" answer
+  if [[ "${answer:-Y}" =~ ^[Nn]$ ]]; then
+    expires=""
+  else
+    read -rp "到期日期 YYYY-MM-DD [$(TZ="$TIMEZONE" date -d '+1 month' '+%Y-%m-%d')]：" expires
+    expires="${expires:-$(TZ="$TIMEZONE" date -d '+1 month' '+%Y-%m-%d')}"
+  fi
+
+  args=()
+  case "$protocol" in
+    snell5)
+      read -rp "Snell v5 HTTP 混淆？[y/N]：" answer
+      [[ "${answer:-N}" =~ ^[Yy]$ ]] && args+=(--snell5-obfs http)
+      ;;
+    snell6)
+      read -rp "Snell v6 模式 [default]：" answer
+      args+=(--snell6-mode "${answer:-default}")
+      ;;
+    anytls|vless)
+      read -rp "REALITY 握手域名 [www.apple.com]：" answer
+      args+=(--server-name "${answer:-www.apple.com}")
+      ;;
+    hy2)
+      read -rp "Hysteria2 SNI [www.bing.com]：" answer
+      args+=(--server-name "${answer:-www.bing.com}")
+      read -rp "启用 Gecko 混淆？[Y/n]：" answer
+      [[ "${answer:-Y}" =~ ^[Yy]$ ]] && args+=(--obfs gecko)
+      ;;
+    direct)
+      read -rp "固定目标地址：" answer
+      args+=(--target "$answer")
+      read -rp "固定目标端口：" answer
+      args+=(--target-port "$answer")
+      ;;
+  esac
+
+  local -a add_args=(
+    "$node_id" "$protocol"
+    --customer "$customer"
+    --port "$port"
+    --quota "$quota"
+    --reset-day "$reset_day"
+  )
+  [[ -n "$expires" ]] && add_args+=(--expires "$expires")
+  add_args+=("${args[@]}")
+  cmd_node_add "${add_args[@]}"
+}
+
+interactive_edit_limit() {
+  local node_json quota reset_day expires answer
+  select_node_interactive "选择节点" || return 0
+  node_json="$(node_json_by_id "$SELECTED_NODE")"
+  echo "当前额度：$(format_bytes "$(jq -r '.quota_bytes' <<<"$node_json")")"
+  read -rp "新额度 [0=不限]：" quota
+  read -rp "每月重置日 [1-28]：" reset_day
+  read -rp "修改到期时间？[y/N]：" answer
+  if [[ "${answer:-N}" =~ ^[Yy]$ ]]; then
+    read -rp "新到期日期 YYYY-MM-DD：" expires
+    cmd_traffic_set "$SELECTED_NODE" --quota "${quota:-0}" \
+      --reset-day "${reset_day:-1}" --expires "$expires"
+  else
+    cmd_traffic_set "$SELECTED_NODE" --quota "${quota:-0}" \
+      --reset-day "${reset_day:-1}"
+  fi
+}
+
+interactive_notify() {
+  local token chat
+  read -rsp "Telegram Bot Token：" token
+  echo
+  read -rp "Telegram Chat ID（多个用英文逗号分隔）：" chat
+  notify_setup "$token" "$chat"
+  if notify_send "[sbox-reality] Telegram 配置测试成功"; then
+    info "测试通知已发送"
+  else
+    warn "测试通知发送失败，请检查 Token、Chat ID 或机器人权限"
+  fi
+}
+
+manager_menu() {
+  local choice answer
+  acquire_lock
+  init_state
+  while true; do
+    echo
+    echo "sbox-reality 客户节点管理"
+    echo "  1) 添加客户节点"
+    echo "  2) 查看所有节点"
+    echo "  3) 查看流量和到期状态"
+    echo "  4) 修改额度/重置日/到期时间"
+    echo "  5) 重置本月流量"
+    echo "  6) 暂停节点"
+    echo "  7) 恢复节点"
+    echo "  8) 删除节点"
+    echo "  9) 配置/测试 Telegram"
+    echo "  0) 退出"
+    read -rp "请选择 [0-9]：" choice
+    case "$choice" in
+      1) interactive_add_node ;;
+      2) cmd_node_list ;;
+      3) cmd_traffic_show ;;
+      4) interactive_edit_limit ;;
+      5)
+        select_node_interactive "选择要重置流量的节点" \
+          && cmd_traffic_reset "$SELECTED_NODE"
+        ;;
+      6)
+        select_node_interactive "选择要暂停的节点" \
+          && cmd_traffic_pause "$SELECTED_NODE"
+        ;;
+      7)
+        select_node_interactive "选择要恢复的节点" \
+          && cmd_traffic_resume "$SELECTED_NODE"
+        ;;
+      8)
+        if select_node_interactive "选择要删除的节点"; then
+          read -rp "确认删除 $SELECTED_NODE？[y/N]：" answer
+          [[ "${answer:-N}" =~ ^[Yy]$ ]] \
+            && cmd_node_remove "$SELECTED_NODE"
+        fi
+        ;;
+      9) interactive_notify ;;
+      0) return 0 ;;
+      *) echo "请输入 0-9" ;;
+    esac
+  done
+}
+
 cmd_node_disable() {
   local id="${1:-}" tmp
   node_exists "$id" || die "节点不存在：$id"
@@ -1479,6 +1671,8 @@ cmd_node_migrate() {
 usage() {
   cat <<'EOF'
 用法：
+  sbox-node
+  sbox-node menu
   sbox-node install
   sbox-node node add ID snell5|snell6|anytls|vless|hy2|direct [选项]
   sbox-node node list
@@ -1510,7 +1704,13 @@ main() {
       acquire_lock
       init_state
       case "$action" in
-        add) cmd_node_add "$@" ;;
+        add)
+          if (( $# == 0 )); then
+            interactive_add_node
+          else
+            cmd_node_add "$@"
+          fi
+          ;;
         list) cmd_node_list ;;
         show) cmd_node_show "$@" ;;
         clients|regen) cmd_node_clients "$@" ;;
@@ -1552,7 +1752,15 @@ main() {
       esac
       ;;
     cleanup) cleanup_manager "${1:-}" ;;
-    help|-h|--help|"") usage ;;
+    menu) manager_menu ;;
+    help|-h|--help) usage ;;
+    "")
+      if [[ -t 0 ]]; then
+        manager_menu
+      else
+        usage
+      fi
+      ;;
     *) usage >&2; exit 2 ;;
   esac
 }

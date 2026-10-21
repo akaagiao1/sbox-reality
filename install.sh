@@ -5389,7 +5389,7 @@ prompt_telegram_setup() {
 }
 
 run_manager_setup() {
-  local telegram_configured=0
+  local telegram_configured=0 answer
 
   [[ "$ACTION" == "install" ]] \
     || { echo "错误：--setup 不能和卸载、恢复动作同时使用" >&2; exit 1; }
@@ -5427,6 +5427,12 @@ run_manager_setup() {
   fi
   echo "下一步添加客户："
   echo "  sbox-node node add customer-a snell5 --port 25001 --quota 100G --expires 2026-12-31"
+  if [[ -t 0 ]]; then
+    read -rp "现在进入客户节点管理菜单？[Y/n]：" answer
+    if [[ ! "${answer:-Y}" =~ ^[Nn]$ ]]; then
+      "$MANAGER_NODE_BIN" menu
+    fi
+  fi
 }
 
 main() {
