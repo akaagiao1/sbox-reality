@@ -793,7 +793,8 @@ warp_current_rules() {
       | select(
           .type == "remote"
           and .format == "binary"
-          and .download_detour == "sbox-warp-direct"
+          and (.http_client == {detour: "sbox-warp-direct"}
+            or .download_detour == "sbox-warp-direct")
           and (.tag | type == "string" and test("^sbox-warp-geosite-[a-z0-9_-]+$"))
         )
       | (.tag | sub("^sbox-warp-geosite-"; "")) as $name
@@ -836,13 +837,18 @@ warp_validate_managed_ownership() {
       (.tag | sub("^sbox-warp-geosite-"; "")) as $name
       | .type == "remote"
         and .format == "binary"
-        and .download_detour == "sbox-warp-direct"
-        and .url == ("https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo-lite/geosite/" + $name + ".srs")
-        and ((keys | sort) == ["download_detour", "format", "tag", "type", "url"]);
+        and (
+          (.http_client == {detour: "sbox-warp-direct"}
+            and ((keys | sort) == ["format", "http_client", "tag", "type", "url"]))
+          or (.download_detour == "sbox-warp-direct"
+            and ((keys | sort) == ["download_detour", "format", "tag", "type", "url"]))
+        )
+        and .url == ("https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo-lite/geosite/" + $name + ".srs");
 
     ([.outbounds[]? | select(.tag == "sbox-warp-direct")] | length) <= 1
     and all(.outbounds[]? | select(.tag == "sbox-warp-direct");
-      . == {type: "direct", tag: "sbox-warp-direct"})
+      (. == {type: "direct", tag: "sbox-warp-direct"}
+        or . == {type: "direct", tag: "sbox-warp-direct", connect_timeout: "15s"}))
     and ([.endpoints[]? | select(.tag == "sbox-warp-out")] | length) <= 1
     and all(.endpoints[]? | select(.tag == "sbox-warp-out"); valid_managed_endpoint)
     and all(.route.rule_set[]? | select((.tag // "") | startswith("sbox-warp-geosite-"));
@@ -921,10 +927,11 @@ warp_merge_config() {
     return 1
   fi
 
+  # An explicit timeout also makes the direct outbound a valid HTTP client detour.
   if ! jq --slurpfile credentials "$credentials_file" --argjson rules "$rules_json" '
     $credentials[0] as $credential
     | ($rules | map("sbox-warp-geosite-" + .)) as $rule_tags
-    | .outbounds = ((.outbounds // []) + [{type: "direct", tag: "sbox-warp-direct"}])
+    | .outbounds = ((.outbounds // []) + [{type: "direct", tag: "sbox-warp-direct", connect_timeout: "15s"}])
     | .endpoints = ((.endpoints // []) + [{
         type: "wireguard",
         tag: "sbox-warp-out",
@@ -948,7 +955,7 @@ warp_merge_config() {
             tag: ("sbox-warp-geosite-" + $name),
             format: "binary",
             url: ("https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo-lite/geosite/" + $name + ".srs"),
-            download_detour: "sbox-warp-direct"
+            http_client: {detour: "sbox-warp-direct"}
           }
       ])
     | .route.rules = ([

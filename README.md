@@ -119,6 +119,8 @@ bash install.sh --warp-reset --warp-rules netflix
 
 规则来自 [MetaCubeX/meta-rules-dat](https://github.com/MetaCubeX/meta-rules-dat/tree/sing) 的 `sing/geo-lite/geosite` 二进制规则集。例如 `youtube` 对应 `geo-lite/geosite/youtube.srs`。sing-box 通过脚本管理的 `sbox-warp-direct` 直连出口下载这些规则，匹配后转到 `sbox-warp-out` WireGuard endpoint；未匹配流量的 `route.final` 和现有自定义规则保持原样。
 
+规则下载使用 sing-box 1.14+ 的 `http_client`，直连出口连接超时为 15 秒。旧版生成的 `download_detour` 会在重新设置 WARP 分流时升级。如果日志提示 `ENABLE_DEPRECATED_LEGACY_RULE_SET_DOWNLOAD_DETOUR`，请下载最新版脚本并执行 `bash install.sh --warp-rules youtube`，即可复用现有凭据、升级 YouTube 规则下载配置并重启服务。
+
 首次启用会注册一份免费 WARP 设备凭据，后续修改规则直接复用。凭据保存在 `/etc/sing-box/sbox-warp-credentials.credentials`，权限为 `600`，备份和恢复配置时会一起处理。该文件包含 WARP 私钥，请勿上传、公开或复制到日志中。只有 `--warp-reset` 会主动注册新凭据；`--warp-off` 会保留旧凭据，完整卸载 sing-box 才会删除。
 
 凭据使用非 `.json` 后缀，避免服务通过 `sing-box -C /etc/sing-box` 加载目录时把凭据误读为配置。新版脚本会自动迁移旧的 `sbox-warp-credentials.json`，旧备份中的凭据也会恢复到新文件名。如果旧版已出现 `unknown field "schema"` 并反复重启，可先恢复服务：

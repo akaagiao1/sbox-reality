@@ -328,7 +328,8 @@ JSON
       and ([.endpoints[] | select(.tag == "sbox-warp-out" and .type == "wireguard")] | length) == 1
       and ([.route.rule_set[] | select(.tag == "sbox-warp-geosite-youtube"
         and .type == "remote" and .format == "binary"
-        and .download_detour == "sbox-warp-direct"
+        and .http_client == {"detour":"sbox-warp-direct"}
+        and (has("download_detour") | not)
         and .url == "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo-lite/geosite/youtube.srs")] | length) == 1
       and ([.route.rule_set[] | select(.tag == "sbox-warp-geosite-netflix")] | length) == 1
       and .route.rules[0] == {"action":"sniff"}
@@ -354,6 +355,26 @@ JSON
   ' _ "$INSTALL_SCRIPT" "$merged")"
   assert_eq '["youtube","netflix"]' "$current_rules" \
     "managed rule names should be extractable"
+
+  jq '
+    .route.rule_set |= map(.download_detour = .http_client.detour | del(.http_client))
+    | .outbounds |= map(if .tag == "sbox-warp-direct" then del(.connect_timeout) else . end)
+  ' "$merged" > "$TEST_TMP/legacy-warp.json"
+  assert_eq '["youtube","netflix"]' "$(bash -c '
+    script=$1; config=$2; set --; source "$script"; warp_current_rules "$config"
+  ' _ "$INSTALL_SCRIPT" "$TEST_TMP/legacy-warp.json")" \
+    "legacy selected rules should remain reusable without registering again"
+  assert_succeeds "legacy rules should upgrade to the supported HTTP client" \
+    merge_warp_config "$TEST_TMP/legacy-warp.json" "$credentials" '["youtube"]' "$TEST_TMP/upgraded-warp.json"
+  assert_succeeds "upgraded rules should contain no deprecated download fields" \
+    jq -e 'all(.route.rule_set[]; (has("download_detour") | not) and .http_client == {detour:"sbox-warp-direct"})' \
+      "$TEST_TMP/upgraded-warp.json"
+  assert_succeeds "warp-off should recognize legacy managed objects" \
+    bash -c '
+      script=$1; input=$2; output=$3; set --; source "$script"
+      warp_remove_config "$input" "$output"
+      jq -e "(.route.rule_set | length) == 0" "$output"
+    ' _ "$INSTALL_SCRIPT" "$TEST_TMP/legacy-warp.json" "$TEST_TMP/legacy-off.json"
 
   assert_succeeds "replacement should remove old managed rule sets" \
     merge_warp_config "$merged" "$credentials" '["netflix"]' "$updated"
@@ -440,6 +461,9 @@ JSON
       merge_warp_config "$TEST_TMP/schema-base.json" "$credentials" '["youtube"]' "$TEST_TMP/schema-merged.json"
     assert_succeeds "sing-box should accept the generated WARP config" \
       /workspace/.sbox-dev/bin/sing-box check -c "$TEST_TMP/schema-merged.json"
+    assert_succeeds "rule downloader must start without deprecated-feature overrides" \
+      python3 "$ROOT_DIR/tests/check-ruleset-startup.py" \
+        /workspace/.sbox-dev/bin/sing-box "$TEST_TMP/schema-merged.json"
     cp "$TEST_TMP/schema-merged.json" /tmp/sbox-warp-generated-test.json
   fi
 }
