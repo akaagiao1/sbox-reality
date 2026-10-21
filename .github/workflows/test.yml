@@ -90,12 +90,16 @@ jobs:
           echo "${DIGEST#sha256:}  /tmp/sing-box.tar.gz" | sha256sum -c -
 
       - name: Extract sing-box Alpha
+        env:
+          VERSION: ${{ steps.alpha.outputs.version }}
         run: |
           set -euo pipefail
           tar -xzf /tmp/sing-box.tar.gz -C /tmp
-          binary="$(find /tmp -type f -name sing-box -perm -111 | head -n 1)"
-          test -n "$binary"
+          version_number="${VERSION#v}"
+          binary="/tmp/sing-box-${version_number}-linux-amd64/sing-box"
+          test -x "$binary"
           echo "SING_BOX_TEST_BIN=$binary" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$(dirname "$binary")" >> "$GITHUB_ENV"
           "$binary" version
 
       - name: Run tests
