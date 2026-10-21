@@ -46,7 +46,8 @@ GECKO_MIN_PACKET_SIZE="${GECKO_MIN_PACKET_SIZE:-512}"
 GECKO_MAX_PACKET_SIZE="${GECKO_MAX_PACKET_SIZE:-1200}"
 PROXY_NAME="${PROXY_NAME:-HY2}"
 
-SERVER_CONF="/etc/sing-box/config.json"
+SERVER_CONF="${SERVER_CONF:-/etc/sing-box/config.json}"
+WARP_CREDENTIALS_FILE="${WARP_CREDENTIALS_FILE:-/etc/sing-box/sbox-warp-credentials.json}"
 OUTPUT_DIR="/root/sing-box"
 ANYTLS_CLIENT_OUT="$OUTPUT_DIR/anytls-sing-box.json"
 ANYTLS_URL_FILE="$OUTPUT_DIR/anytls-url.txt"
@@ -909,6 +910,171 @@ warp_merge_config() {
     return 1
   fi
   mv -f "$temporary" "$output_file"
+}
+
+warp_prepare_credentials() {
+  local staged_file="$1"
+
+  if [[ -e "$WARP_CREDENTIALS_FILE" ]] && (( ! WARP_RESET )); then
+    if ! warp_validate_credentials "$WARP_CREDENTIALS_FILE"; then
+      echo "错误：现有 WARP 凭据无效；请使用 --warp-reset 重新注册" >&2
+      return 1
+    fi
+    cp "$WARP_CREDENTIALS_FILE" "$staged_file"
+  else
+    echo "正在向 Cloudflare 注册 WARP 凭据……"
+    if ! warp_register_credentials "$staged_file"; then
+      echo "错误：WARP 凭据注册失败" >&2
+      rm -f "$staged_file"
+      return 1
+    fi
+  fi
+
+  if ! warp_validate_credentials "$staged_file"; then
+    echo "错误：暂存的 WARP 凭据无效" >&2
+    rm -f "$staged_file"
+    return 1
+  fi
+  chmod 600 "$staged_file"
+}
+
+warp_restore_file() {
+  local snapshot_file="$1"
+  local destination="$2"
+  local existed="$3"
+  local temporary
+
+  if (( existed )); then
+    temporary="$(mktemp "$(dirname "$destination")/.sbox-warp-restore.XXXXXX")"
+    cp -p "$snapshot_file" "$temporary"
+    chmod 600 "$temporary"
+    mv -f "$temporary" "$destination"
+  else
+    rm -f "$destination"
+  fi
+}
+
+warp_commit_staged_files() {
+  local staged_config="$1"
+  local staged_credentials="${2:-}"
+  local snapshot_dir config_existed=0 credentials_existed=0
+
+  snapshot_dir="$(mktemp -d "$(dirname "$SERVER_CONF")/.sbox-warp-snapshot.XXXXXX")"
+  if [[ -e "$SERVER_CONF" ]]; then
+    config_existed=1
+    cp -p "$SERVER_CONF" "$snapshot_dir/config.json"
+  fi
+  if [[ -e "$WARP_CREDENTIALS_FILE" ]]; then
+    credentials_existed=1
+    cp -p "$WARP_CREDENTIALS_FILE" "$snapshot_dir/credentials.json"
+  fi
+
+  if ! backup_existing_files "before-warp-update"; then
+    rm -rf "$snapshot_dir"
+    return 1
+  fi
+
+  chmod 600 "$staged_config"
+  if ! mv -f "$staged_config" "$SERVER_CONF"; then
+    rm -rf "$snapshot_dir"
+    return 1
+  fi
+  if [[ -n "$staged_credentials" ]]; then
+    chmod 600 "$staged_credentials"
+    if ! mv -f "$staged_credentials" "$WARP_CREDENTIALS_FILE"; then
+      warp_restore_file "$snapshot_dir/config.json" "$SERVER_CONF" "$config_existed"
+      warp_restore_file "$snapshot_dir/credentials.json" "$WARP_CREDENTIALS_FILE" "$credentials_existed"
+      rm -rf "$snapshot_dir"
+      return 1
+    fi
+  fi
+
+  if ! service_restart; then
+    echo "错误：sing-box 重启失败，正在恢复 WARP 修改前的文件" >&2
+    warp_restore_file "$snapshot_dir/config.json" "$SERVER_CONF" "$config_existed"
+    warp_restore_file "$snapshot_dir/credentials.json" "$WARP_CREDENTIALS_FILE" "$credentials_existed"
+    service_restart || true
+    rm -rf "$snapshot_dir"
+    return 1
+  fi
+
+  rm -rf "$snapshot_dir"
+}
+
+warp_apply_existing() {
+  local rules_json stage_dir staged_config staged_credentials
+
+  if [[ ! -s "$SERVER_CONF" ]] || ! jq -e . "$SERVER_CONF" >/dev/null 2>&1; then
+    echo "错误：独立配置 WARP 前需要有效的 $SERVER_CONF" >&2
+    return 1
+  fi
+
+  if (( WARP_RULES_EXPLICIT )); then
+    rules_json="$WARP_RULES_JSON"
+  else
+    rules_json="$(warp_current_rules "$SERVER_CONF")" || return 1
+    if ! jq -e 'type == "array" and length > 0' <<< "$rules_json" >/dev/null 2>&1; then
+      echo "错误：当前没有可沿用的 WARP 规则，请同时指定 --warp-rules" >&2
+      return 1
+    fi
+  fi
+
+  warp_validate_rule_urls "$rules_json" || return 1
+  stage_dir="$(mktemp -d "$(dirname "$SERVER_CONF")/.sbox-warp-stage.XXXXXX")"
+  staged_config="$stage_dir/config.json"
+  staged_credentials="$stage_dir/credentials.json"
+
+  if ! warp_prepare_credentials "$staged_credentials" \
+    || ! warp_merge_config "$SERVER_CONF" "$staged_credentials" "$rules_json" "$staged_config"; then
+    rm -rf "$stage_dir"
+    return 1
+  fi
+  if ! run_sing_box check -c "$staged_config"; then
+    echo "错误：WARP 配置未通过 sing-box 检查，现有文件保持不变" >&2
+    rm -rf "$stage_dir"
+    return 1
+  fi
+  if ! warp_commit_staged_files "$staged_config" "$staged_credentials"; then
+    rm -rf "$stage_dir"
+    return 1
+  fi
+  rm -rf "$stage_dir"
+  echo "WARP 分流已更新：$(jq -r 'join(",")' <<< "$rules_json")"
+}
+
+warp_disable_existing() {
+  local stage_dir staged_config
+
+  if [[ ! -s "$SERVER_CONF" ]] || ! jq -e . "$SERVER_CONF" >/dev/null 2>&1; then
+    echo "错误：关闭 WARP 前需要有效的 $SERVER_CONF" >&2
+    return 1
+  fi
+
+  stage_dir="$(mktemp -d "$(dirname "$SERVER_CONF")/.sbox-warp-stage.XXXXXX")"
+  staged_config="$stage_dir/config.json"
+  if ! warp_remove_config "$SERVER_CONF" "$staged_config"; then
+    rm -rf "$stage_dir"
+    return 1
+  fi
+  if ! run_sing_box check -c "$staged_config"; then
+    echo "错误：关闭 WARP 后的配置未通过 sing-box 检查" >&2
+    rm -rf "$stage_dir"
+    return 1
+  fi
+  if ! warp_commit_staged_files "$staged_config"; then
+    rm -rf "$stage_dir"
+    return 1
+  fi
+  rm -rf "$stage_dir"
+  echo "WARP 分流已关闭；凭据已保留在 $WARP_CREDENTIALS_FILE"
+}
+
+warp_run_standalone() {
+  if (( WARP_OFF )); then
+    warp_disable_existing
+  else
+    warp_apply_existing
+  fi
 }
 
 while [[ $# -gt 0 ]]; do
@@ -3949,6 +4115,18 @@ main() {
   detect_platform
   prepare_output_dir
   resolve_sing_box_binary || true
+
+  if [[ "$ACTION" == "warp" ]]; then
+    if ! command -v jq >/dev/null 2>&1; then
+      install_jq
+    fi
+    if [[ -z "$SING_BOX_BIN" ]] && ! resolve_sing_box_binary; then
+      echo "错误：独立配置 WARP 前需要已安装 sing-box" >&2
+      return 1
+    fi
+    warp_run_standalone
+    return 0
+  fi
 
   if [[ "$ACTION" == "uninstall" ]]; then
     uninstall_selected

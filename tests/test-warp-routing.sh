@@ -422,6 +422,193 @@ JSON
   fi
 }
 
+run_warp_apply() {
+  local config="$1"
+  local credentials="$2"
+  local registration_fixture="$3"
+  local rules_json="$4"
+  local reset="$5"
+  local register_count="$6"
+  local restart_count="$7"
+  local failure="${8:-none}"
+
+  SERVER_CONF="$config" WARP_CREDENTIALS_FILE="$credentials" \
+    bash -c '
+      script=$1; registration_fixture=$2; rules_json=$3; reset=$4
+      register_count=$5; restart_count=$6; failure=$7
+      set --; source "$script"
+      WARP_RULES_JSON="$rules_json"
+      WARP_RULES_EXPLICIT=1
+      WARP_RESET="$reset"
+      warp_probe_url() { [[ "$failure" != url ]]; }
+      warp_register_credentials() {
+        count=0; [[ -f "$register_count" ]] && count="$(cat "$register_count")"
+        printf "%s\n" "$(( count + 1 ))" > "$register_count"
+        [[ "$failure" != registration ]] || return 1
+        cp "$registration_fixture" "$1"
+      }
+      if [[ "$failure" == merge ]]; then
+        warp_merge_config() { return 1; }
+      fi
+      run_sing_box() {
+        [[ "$failure" != check ]]
+      }
+      backup_existing_files() { return 0; }
+      service_restart() {
+        count=0; [[ -f "$restart_count" ]] && count="$(cat "$restart_count")"
+        count=$(( count + 1 ))
+        printf "%s\n" "$count" > "$restart_count"
+        if [[ "$failure" == restart && "$count" == 1 ]]; then
+          return 1
+        fi
+        return 0
+      }
+      warp_apply_existing
+    ' _ "$INSTALL_SCRIPT" "$registration_fixture" "$rules_json" "$reset" \
+      "$register_count" "$restart_count" "$failure"
+}
+
+run_warp_off() {
+  local config="$1"
+  local credentials="$2"
+  local restart_count="$3"
+
+  SERVER_CONF="$config" WARP_CREDENTIALS_FILE="$credentials" \
+    bash -c '
+      script=$1; restart_count=$2; set --; source "$script"
+      run_sing_box() { return 0; }
+      backup_existing_files() { return 0; }
+      service_restart() {
+        count=0; [[ -f "$restart_count" ]] && count="$(cat "$restart_count")"
+        printf "%s\n" "$(( count + 1 ))" > "$restart_count"
+      }
+      warp_disable_existing
+    ' _ "$INSTALL_SCRIPT" "$restart_count"
+}
+
+test_transaction() {
+  local config="$TEST_TMP/transaction-config.json"
+  local credentials="$TEST_TMP/transaction-credentials.json"
+  local fixture_one="$TEST_TMP/transaction-fixture-one.json"
+  local fixture_two="$TEST_TMP/transaction-fixture-two.json"
+  local register_count="$TEST_TMP/register-count"
+  local restart_count="$TEST_TMP/restart-count"
+  local original_config original_credentials
+
+  cat > "$config" <<'JSON'
+{
+  "inbounds": [{"type":"mixed","tag":"test-in","listen":"127.0.0.1","listen_port":2080}],
+  "outbounds": [{"type":"direct"}]
+}
+JSON
+  write_test_credentials "$fixture_one"
+  cp "$fixture_one" "$fixture_two"
+  jq --arg key "$(printf '11111111111111111111111111111111' | base64 | tr -d '\n')" \
+    '.private_key = $key | .public_key = $key' "$fixture_two" > "$fixture_two.tmp"
+  mv "$fixture_two.tmp" "$fixture_two"
+
+  assert_succeeds "first standalone enable should register and apply WARP" \
+    run_warp_apply "$config" "$credentials" "$fixture_one" '["youtube"]' 0 \
+      "$register_count" "$restart_count"
+  assert_eq '1' "$(cat "$register_count")" "first enable should register once"
+  assert_eq '1' "$(cat "$restart_count")" "first enable should restart once"
+  assert_eq '600' "$(stat -c '%a' "$config")" "server config mode should be 600"
+  assert_eq '600' "$(stat -c '%a' "$credentials")" "credential mode should be 600"
+  assert_succeeds "first enable should install youtube routing" \
+    jq -e '.route.rules[1].rule_set == ["sbox-warp-geosite-youtube"]' "$config"
+
+  assert_succeeds "second update should reuse credentials" \
+    run_warp_apply "$config" "$credentials" "$fixture_two" '["netflix"]' 0 \
+      "$register_count" "$restart_count"
+  assert_eq '1' "$(cat "$register_count")" "ordinary update must not register again"
+  assert_succeeds "second update should replace the selected rule" \
+    jq -e '.route.rules[1].rule_set == ["sbox-warp-geosite-netflix"]' "$config"
+  assert_succeeds "ordinary update should preserve original credentials" \
+    bash -c 'cmp -s "$1" "$2"' _ "$credentials" "$fixture_one"
+
+  assert_succeeds "reset should replace credentials" \
+    run_warp_apply "$config" "$credentials" "$fixture_two" '["netflix"]' 1 \
+      "$register_count" "$restart_count"
+  assert_eq '2' "$(cat "$register_count")" "reset should register exactly once more"
+  assert_succeeds "reset should install newly registered credentials" \
+    bash -c 'cmp -s "$1" "$2"' _ "$credentials" "$fixture_two"
+
+  assert_succeeds "warp-off should remove managed routing" \
+    run_warp_off "$config" "$credentials" "$restart_count"
+  assert_succeeds "warp-off should remove endpoint and managed outbound" \
+    jq -e '
+      ([.endpoints[]? | select(.tag == "sbox-warp-out")] | length) == 0
+      and ([.outbounds[]? | select(.tag == "sbox-warp-direct")] | length) == 0
+    ' "$config"
+  assert_succeeds "warp-off should retain credentials" \
+    bash -c 'cmp -s "$1" "$2"' _ "$credentials" "$fixture_two"
+  assert_succeeds "repeated warp-off should be idempotent" \
+    run_warp_off "$config" "$credentials" "$restart_count"
+
+  assert_succeeds "restore youtube before failure injection" \
+    run_warp_apply "$config" "$credentials" "$fixture_two" '["youtube"]' 0 \
+      "$register_count" "$restart_count"
+  original_config="$(sha256sum "$config" | awk '{print $1}')"
+  original_credentials="$(sha256sum "$credentials" | awk '{print $1}')"
+
+  assert_fails "rule URL failure should not change formal files" \
+    run_warp_apply "$config" "$credentials" "$fixture_one" '["netflix"]' 0 \
+      "$register_count" "$restart_count" url
+  assert_eq "$original_config" "$(sha256sum "$config" | awk '{print $1}')" \
+    "URL failure should preserve config"
+  assert_eq "$original_credentials" "$(sha256sum "$credentials" | awk '{print $1}')" \
+    "URL failure should preserve credentials"
+
+  assert_fails "registration failure during reset should preserve files" \
+    run_warp_apply "$config" "$credentials" "$fixture_one" '["netflix"]' 1 \
+      "$register_count" "$restart_count" registration
+  assert_eq "$original_config" "$(sha256sum "$config" | awk '{print $1}')" \
+    "registration failure should preserve config"
+  assert_eq "$original_credentials" "$(sha256sum "$credentials" | awk '{print $1}')" \
+    "registration failure should preserve old credentials"
+
+  assert_fails "merge failure should preserve files" \
+    run_warp_apply "$config" "$credentials" "$fixture_one" '["netflix"]' 0 \
+      "$register_count" "$restart_count" merge
+  assert_eq "$original_config" "$(sha256sum "$config" | awk '{print $1}')" \
+    "merge failure should preserve config"
+
+  assert_fails "sing-box check failure should preserve files" \
+    run_warp_apply "$config" "$credentials" "$fixture_one" '["netflix"]' 0 \
+      "$register_count" "$restart_count" check
+  assert_eq "$original_config" "$(sha256sum "$config" | awk '{print $1}')" \
+    "check failure should preserve config"
+
+  printf '0\n' > "$restart_count"
+  assert_fails "restart failure should roll back both formal files" \
+    run_warp_apply "$config" "$credentials" "$fixture_one" '["netflix"]' 1 \
+      "$register_count" "$restart_count" restart
+  assert_eq '2' "$(cat "$restart_count")" \
+    "restart failure should attempt the restored service"
+  assert_eq "$original_config" "$(sha256sum "$config" | awk '{print $1}')" \
+    "restart rollback should restore config"
+  assert_eq "$original_credentials" "$(sha256sum "$credentials" | awk '{print $1}')" \
+    "restart rollback should restore credentials"
+
+  assert_succeeds "standalone dispatcher should select a WARP update" \
+    bash -c '
+      script=$1; sentinel=$2; set --; source "$script"
+      WARP_OFF=0
+      warp_apply_existing() { printf update > "$sentinel"; }
+      warp_run_standalone
+      [[ "$(cat "$sentinel")" == update ]]
+    ' _ "$INSTALL_SCRIPT" "$TEST_TMP/main-update-sentinel"
+
+  assert_succeeds "standalone dispatcher should select WARP disable" \
+    bash -c '
+      script=$1; sentinel=$2; set --; source "$script"
+      WARP_OFF=1
+      warp_disable_existing() { printf disable > "$sentinel"; }
+      warp_run_standalone
+      [[ "$(cat "$sentinel")" == disable ]]
+    ' _ "$INSTALL_SCRIPT" "$TEST_TMP/main-disable-sentinel"
+}
+
 case "$TEST_GROUP" in
   normalization)
     test_normalization
@@ -432,12 +619,16 @@ case "$TEST_GROUP" in
   config)
     test_config
     ;;
+  transaction)
+    test_transaction
+    ;;
   all)
     test_normalization
     test_credentials
     test_config
+    test_transaction
     ;;
-  transaction|integration)
+  integration)
     fail "test group not implemented yet: $TEST_GROUP"
     ;;
   *)
