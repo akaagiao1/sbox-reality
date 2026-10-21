@@ -229,25 +229,64 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 
 ## 多客户节点、流量和到期管理
 
-除单协议安装菜单外，仓库提供 `sbox-manager.sh` 作为多租户节点管理器。它允许同一个 sing-box 进程运行多个 Snell、AnyTLS、VLESS、Hysteria2 或 Direct 入站，每个客户节点有独立端口、凭据、客户端文件、流量额度和到期时间。
+统一安装脚本支持真正的一键客户节点创建。下面一条命令会完成依赖安装、sing-box 安装、管理命令安装、客户节点创建、独立凭据生成、流量额度和到期时间设置：
 
-先安装或更新一次统一安装脚本，管理命令会安装到：
+```bash
+SBOX_REALITY_INSTALL_REF=codex/multi-tenant-traffic \
+bash <(curl -fsSL \
+  https://raw.githubusercontent.com/akaagiao1/sbox-reality/codex/multi-tenant-traffic/install.sh) \
+  --customer customer-a \
+  --mode snell5 \
+  --port 25001 \
+  --quota 100G \
+  --reset-day 1 \
+  --expires 2026-12-31
+```
+
+合并到 `main` 后可以去掉 `SBOX_REALITY_INSTALL_REF`：
+
+```bash
+bash <(curl -fsSL \
+  https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) \
+  --customer customer-a \
+  --mode snell5 \
+  --port 25001 \
+  --quota 100G \
+  --reset-day 1 \
+  --expires 2026-12-31
+```
+
+重复执行并更换 `--customer`、`--mode` 和端口，即可给其他客户增加独立节点。已有客户、WARP、路由和自定义入站会保留。
+
+一次安装时也可以直接配置 Telegram：
+
+```bash
+SBOX_TG_BOT_TOKEN='123456789:AAExampleToken' \
+SBOX_TG_CHAT_ID='123456789,-1001234567890' \
+bash <(curl -fsSL \
+  https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) \
+  --customer customer-b \
+  --mode snell6 \
+  --port 25002 \
+  --quota 50G \
+  --expires 2026-11-30
+```
+
+统一安装脚本不会覆盖已有配置。管理命令会安装到：
 
 ```text
 /usr/local/sbin/sbox-node
 /usr/local/sbin/sbox-traffic
 ```
 
-也可以直接安装仓库中的管理脚本：
+后续管理使用：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/sbox-manager.sh \
-  -o /tmp/sbox-manager.sh
-bash -n /tmp/sbox-manager.sh
-bash /tmp/sbox-manager.sh install
+sbox-node node list
+sbox-node traffic show
 ```
 
-### 创建多个客户节点
+### 命令行创建更多客户节点
 
 ```bash
 # 客户A，Snell v5，独立端口、PSK、100GB/月
@@ -620,6 +659,12 @@ bash reality.sh --mode vless
 | `-d`, `--domain` | REALITY 握手域名 | `www.apple.com` |
 | `-p`, `--port` | 当前单协议模式的监听端口；同时安装时建议使用各协议端口选项 | `auto` |
 | `--server-host` | 写入客户端 JSON 和分享链接的公网 IP 或域名；自动检测失败时必填 | 自动检测 |
+| `--customer` | 一键创建独立客户节点时使用的客户 ID | 关闭 |
+| `--quota` | 客户节点每月流量额度，例如 `100G` | 不限 |
+| `--reset-day` | 客户节点每月流量重置日 | `1` |
+| `--expires` | 客户节点到期时间 | 不设置 |
+| `--tg-token` | Telegram Bot Token，也可使用环境变量 | 环境变量 |
+| `--tg-chat-id` | Telegram Chat ID，多个用逗号分隔 | 环境变量 |
 | `--anytls-port` | AnyTLS TCP 监听端口 | `auto` |
 | `--vless-domain` | VLESS REALITY 握手域名 | `www.apple.com` |
 | `--vless-port` | VLESS TCP 监听端口 | `auto` |

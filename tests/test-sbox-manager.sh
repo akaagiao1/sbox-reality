@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 MANAGER="$ROOT_DIR/sbox-manager.sh"
+INSTALL_SCRIPT="$ROOT_DIR/install.sh"
 BIN="${SING_BOX_TEST_BIN:-$(command -v sing-box 2>/dev/null || true)}"
 TMP="$(mktemp -d)"
 PASS=0
@@ -210,5 +211,38 @@ assert_true "migration should preserve the original tag and port" \
     .nodes == [.nodes[] | select(.id == "default-snell5"
       and .tag == "snell5-in" and .port == 25001 and .psk == "legacy-password")]
   ' "$TMP/migrate/state/nodes.json"
+
+cat > "$TMP/fake-manager" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FAKE_MANAGER_LOG"
+EOF
+chmod +x "$TMP/fake-manager"
+assert_true "install.sh should dispatch a customer node in one command" \
+  env FAKE_MANAGER_LOG="$TMP/one-click.log" \
+    SBOX_REALITY_TEST_MODE=1 \
+    bash -c '
+      script=$1
+      shift
+      manager=$1
+      set --
+      source "$script"
+      ACTION=install
+      INSTALL_MODE=snell5
+      CUSTOMER_ID=customer-one
+      CUSTOMER_QUOTA=100G
+      CUSTOMER_RESET_DAY=1
+      CUSTOMER_EXPIRES=2027-12-31
+      SHARED_PORT=26001
+      MANAGER_NODE_BIN=$manager
+      detect_platform() { :; }
+      install_dependencies() { :; }
+      install_manager_tool() { :; }
+      enable_bbr_and_fq() { :; }
+      run_customer_install
+    ' _ "$INSTALL_SCRIPT" "$TMP/fake-manager"
+assert_true "one-click dispatch should forward customer, quota and expiry" \
+  grep -Eq \
+    'node add customer-one snell5 .*--port 26001 .*--quota 100G .*--reset-day 1 .*--expires 2027-12-31' \
+    "$TMP/one-click.log"
 
 printf 'PASS: %s assertions (multi-tenant manager)\n' "$PASS"

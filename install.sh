@@ -3,6 +3,12 @@ set -euo pipefail
 
 INSTALL_MODE="${INSTALL_MODE:-}"
 SHARED_PORT="${PORT:-}"
+CUSTOMER_ID="${CUSTOMER_ID:-}"
+CUSTOMER_QUOTA="${CUSTOMER_QUOTA:-0}"
+CUSTOMER_RESET_DAY="${CUSTOMER_RESET_DAY:-1}"
+CUSTOMER_EXPIRES="${CUSTOMER_EXPIRES:-}"
+TG_TOKEN="${SBOX_TG_BOT_TOKEN:-}"
+TG_CHAT_ID="${SBOX_TG_CHAT_ID:-}"
 ACTION="install"
 ACTION_RESTORE_EXPLICIT=0
 ACTION_UNINSTALL_EXPLICIT=0
@@ -563,11 +569,18 @@ WARP 分流选项：
   -m, --mode          模式：1-9、anytls、vless、hy2、snell5、snell6、direct、full、uninstall、restore；协议可逗号多选
   -p, --port          当前单协议模式的端口；同时安装时请分别使用各协议端口选项
       --server-host   写入客户端配置的公网 IP 或域名；无法自动检测时必填
+      --customer      一键创建多客户节点时使用的客户 ID
+      --quota         客户节点每月流量额度，例如 100G
+      --reset-day     客户节点月度流量重置日，1-28
+      --expires       客户节点到期时间，YYYY-MM-DD 或 YYYY-MM-DD HH:MM:SS
+      --tg-token      Telegram Bot Token（也可用 SBOX_TG_BOT_TOKEN）
+      --tg-chat-id    Telegram Chat ID（也可用 SBOX_TG_CHAT_ID）
   -h, --help          显示帮助
 
 环境变量：
   INSTALL_MODE, CONFIG_POLICY, UNINSTALL_SCOPE, PORT,
-  SERVER_HOST,
+  SERVER_HOST, CUSTOMER_ID, CUSTOMER_QUOTA, CUSTOMER_RESET_DAY, CUSTOMER_EXPIRES,
+  SBOX_TG_BOT_TOKEN, SBOX_TG_CHAT_ID,
   REALITY_DOMAIN, DOMAIN, ANYTLS_PORT,
   VLESS_DOMAIN, VLESS_PORT, SNELL5_PORT, SNELL6_PORT,
   DIRECT_PORT, DIRECT_TARGET_ADDRESS, DIRECT_TARGET_PORT,
@@ -1498,6 +1511,8 @@ warp_finalize_install_transaction() {
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -m|--mode|--install|--config|\
+    --customer|--customer-id|--quota|--reset-day|--expires|\
+    --tg-token|--tg-chat-id|\
     -d|--domain|--reality-domain|--anytls-port|--vless-domain|--vless-port|\
     --snell5-port|--snell6-port|--snell5-obfs|--snell6-mode|\
     --direct-port|--direct-address|--direct-target-port|--server-host|\
@@ -1514,6 +1529,30 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     -m|--mode|--install)
       INSTALL_MODE="${2:-}"
+      shift 2
+      ;;
+    --customer|--customer-id)
+      CUSTOMER_ID="${2:-}"
+      shift 2
+      ;;
+    --quota)
+      CUSTOMER_QUOTA="${2:-}"
+      shift 2
+      ;;
+    --reset-day)
+      CUSTOMER_RESET_DAY="${2:-}"
+      shift 2
+      ;;
+    --expires)
+      CUSTOMER_EXPIRES="${2:-}"
+      shift 2
+      ;;
+    --tg-token)
+      TG_TOKEN="${2:-}"
+      shift 2
+      ;;
+    --tg-chat-id)
+      TG_CHAT_ID="${2:-}"
       shift 2
       ;;
     1|anytls|reality)
@@ -5213,6 +5252,112 @@ print_summary() {
   fi
 }
 
+normalize_single_customer_protocol() {
+  local raw token normalized found=""
+  local -a items
+
+  raw="$(normalize_mode_input "${INSTALL_MODE:-}")"
+  IFS=',' read -r -a items <<< "$raw"
+  for token in "${items[@]}"; do
+    token="${token#"${token%%[![:space:]]*}"}"
+    token="${token%"${token##*[![:space:]]}"}"
+    [[ -n "$token" ]] || continue
+    normalized="$(printf '%s' "$token" | tr '[:upper:]' '[:lower:]')"
+    case "$normalized" in
+      1|reality|anytls) normalized="anytls" ;;
+      2|hy2|hysteria2|surge) normalized="hy2" ;;
+      3|vless|vless-reality) normalized="vless" ;;
+      4|snell5|snell-v5) normalized="snell5" ;;
+      5|snell6|snell-v6) normalized="snell6" ;;
+      9|direct|direct-udp|udp-forward) normalized="direct" ;;
+      *) return 1 ;;
+    esac
+    [[ -z "$found" ]] || return 1
+    found="$normalized"
+  done
+  [[ -n "$found" ]] || return 1
+  printf '%s' "$found"
+}
+
+run_customer_install() {
+  local protocol port
+  local -a manager_args args
+
+  [[ "$ACTION" == "install" ]] \
+    || { echo "错误：--customer 只能用于创建客户节点" >&2; exit 1; }
+  [[ "$CUSTOMER_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,47}$ ]] \
+    || { echo "错误：客户 ID 只能包含字母、数字、点、下划线和连字符" >&2; exit 1; }
+  protocol="$(normalize_single_customer_protocol)" \
+    || { echo "错误：--customer 一次只能创建一个协议节点，例如 --mode snell5" >&2; exit 1; }
+  [[ "$CONFIG_POLICY" == "ask" || "$CONFIG_POLICY" == "merge" ]] \
+    || { echo "错误：--customer 不能与 --config $CONFIG_POLICY 同用" >&2; exit 1; }
+  (( WARP_RULES_EXPLICIT || WARP_RESET || WARP_OFF )) \
+    && { echo "错误：--customer 不能和 WARP 参数同时使用；请先创建节点后再单独配置 WARP" >&2; exit 1; }
+  if [[ -n "$TG_TOKEN" || -n "$TG_CHAT_ID" ]]; then
+    [[ -n "$TG_TOKEN" && -n "$TG_CHAT_ID" ]] \
+      || { echo "错误：Telegram Token 和 Chat ID 必须同时提供" >&2; exit 1; }
+  fi
+  if [[ $EUID -ne 0 && "${SBOX_REALITY_TEST_MODE:-0}" != "1" ]]; then
+    echo "错误：请使用 root 用户运行"
+    exit 1
+  fi
+
+  detect_platform
+  install_dependencies
+  install_manager_tool
+  enable_bbr_and_fq
+  service_enable || true
+
+  case "$protocol" in
+    anytls)
+      port="${SHARED_PORT:-$ANYTLS_PORT}"
+      args=(--server-name "$REALITY_DOMAIN")
+      ;;
+    vless)
+      port="${SHARED_PORT:-$VLESS_PORT}"
+      args=(--server-name "$VLESS_DOMAIN")
+      ;;
+    hy2)
+      port="${SHARED_PORT:-$HY2_PORT}"
+      args=(--server-name "$HY2_SNI")
+      [[ "$OBFS" == "off" ]] || args+=(--obfs "$OBFS")
+      ;;
+    snell5)
+      port="${SHARED_PORT:-$SNELL5_PORT}"
+      args=(--snell5-obfs "$SNELL5_OBFS_MODE")
+      ;;
+    snell6)
+      port="${SHARED_PORT:-$SNELL6_PORT}"
+      args=(--snell6-mode "$SNELL6_MODE")
+      ;;
+    direct)
+      port="${SHARED_PORT:-$DIRECT_PORT}"
+      args=(--target "$DIRECT_TARGET_ADDRESS" --target-port "$DIRECT_TARGET_PORT")
+      [[ -n "$DIRECT_TARGET_ADDRESS" && -n "$DIRECT_TARGET_PORT" ]] \
+        || { echo "错误：Direct 客户节点需要 --direct-address 和 --direct-target-port" >&2; exit 1; }
+      ;;
+  esac
+
+  manager_args=(
+    node add "$CUSTOMER_ID" "$protocol"
+    --customer "$CUSTOMER_ID"
+    --port "$port"
+    --quota "$CUSTOMER_QUOTA"
+    --reset-day "$CUSTOMER_RESET_DAY"
+  )
+  [[ -n "$CUSTOMER_EXPIRES" ]] && manager_args+=(--expires "$CUSTOMER_EXPIRES")
+  manager_args+=("${args[@]}")
+  SBOX_SERVER_HOST="$SERVER_HOST" "$MANAGER_NODE_BIN" "${manager_args[@]}"
+
+  if [[ -n "$TG_TOKEN" && -n "$TG_CHAT_ID" ]]; then
+    "$MANAGER_NODE_BIN" notify setup "$TG_TOKEN" "$TG_CHAT_ID"
+    "$MANAGER_NODE_BIN" notify test || true
+  fi
+  echo
+  echo "客户节点一键安装完成：$CUSTOMER_ID"
+  echo "使用 sbox-node node list 查看所有客户节点。"
+}
+
 main() {
   if [[ -n "$MANAGEMENT_MODE" ]]; then
     if [[ -x "$MANAGER_NODE_BIN" ]]; then
@@ -5223,6 +5368,10 @@ main() {
   fi
 
   choose_mode
+  if [[ -n "$CUSTOMER_ID" ]]; then
+    run_customer_install
+    return 0
+  fi
   normalize_mode
   choose_uninstall_scope
 
