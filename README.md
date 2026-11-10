@@ -91,6 +91,29 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 
 ---
 
+## 扫描并自动安装 Reality（先扫邻居域名，再装节点）
+
+不想用默认的 `www.apple.com` 做 dest/SNI，先扫 VPS 所在网段挑个冷门域名再装：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/auto-reality.sh)
+```
+
+默认扫描本机公网 IPv4 所在 `/23`，用 RealityChecker 筛选后握手最快的合格域名，同时装 AnyTLS + VLESS REALITY（`--mode anytls,vless`）。端口不指定，自动挑未占用的高端口。没有合格域名就直接停下，不会退回默认域名装。
+
+```bash
+# 只装 AnyTLS / 只装 VLESS
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/auto-reality.sh) --mode anytls
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/auto-reality.sh) --mode vless
+
+# 用已有扫描结果，跳过扫描
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/auto-reality.sh) --csv file.csv
+```
+
+扫描脚本来自 `xray-reality-onekey` 仓库的固定版本（扫描器/检测器是 glibc 链接的，Alpine 上跑要装 `gcompat`，缺 `python3` 也会自动装，都在扫描脚本里处理）。重复运行会按 install.sh 的增量规则刷新两个 Reality 入站（密码、UUID、密钥会重新生成，旧客户端配置作废），其他已装协议不受影响。
+
+---
+
 ## Cloudflare WARP 按规则分流
 
 安装协议时可以同时指定一个或多个服务名。例如下面的命令会让 YouTube 和 Netflix 流量走 Cloudflare WARP，其他流量继续使用原有路由：
