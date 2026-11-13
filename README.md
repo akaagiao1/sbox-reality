@@ -9,6 +9,7 @@
 - **Hysteria2 + Surge 端口跳跃**
 - **Snell v5（Surge）**
 - **Snell v6（Surge Beta）**
+- **Shadowsocks 2022（2022-blake3 加密）**
 - **Direct 固定目标中转**
 - **Cloudflare WARP 按 geosite 规则分流**
 - **同时安装多个入站到同一个 sing-box 配置**
@@ -48,11 +49,14 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 7) 彻底卸载全部配置和 sing-box（保留备份）
 8) 恢复最新备份
 9) 安装 Direct 固定目标中转
+10) 安装 Shadowsocks 2022（2022-blake3 加密）
 ```
 
 菜单支持自由多选安装协议：例如输入 `1,2` 会同时安装 AnyTLS 和 Hysteria2；输入 `1,2,3` 会同时安装 AnyTLS、Hysteria2 和 VLESS。也支持中文逗号 `1，2，3`。
 
 Direct 固定目标中转可通过选项 `9` 安装，监听端口支持自动选择随机高端口或手动指定，目标地址和目标端口必须由用户填写。配置不写入 `network` 字段，使用 sing-box 默认网络行为；该入站不提供加密或认证，请只向可信来源开放。
+
+Shadowsocks 2022 可通过选项 `10` 或 `--mode ss2022` 安装，默认使用 `2022-blake3-aes-128-gcm`，可用 `--ss2022-method` 改用 `2022-blake3-aes-256-gcm` 或 `2022-blake3-chacha20-poly1305`；监听端口 TCP/UDP 同用一个，支持自动选择或手动指定。`full` 只安装原来的五种协议，不含 Shadowsocks 2022 和 Direct，如需一并安装请多选，例如 `--mode full,ss2022`。
 
 选择安装协议后，脚本还会询问端口方式：输入 `1` 或直接回车自动选择未占用的高端口；输入 `2` 可手动填写 NAT 机器映射给你的自定义端口。自定义端口已被占用时会提示改用其他端口；一次安装多个协议时会分别询问各协议端口。
 
@@ -73,6 +77,9 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 
 # 只安装 Snell v6
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode snell6
+
+# 只安装 Shadowsocks 2022（默认 2022-blake3-aes-128-gcm）
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode ss2022
 
 # 自由多选：同时安装 AnyTLS + Hysteria2
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode 1,2
@@ -212,6 +219,9 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 # 只卸载 Direct 固定目标中转
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --uninstall direct
 
+# 只卸载 Shadowsocks 2022
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --uninstall ss2022
+
 # 卸载全部协议配置，但保留 sing-box 程序
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --uninstall all
 
@@ -221,7 +231,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 
 卸载前会要求确认，并把现有配置备份到 `/root/sbox-reality-backups/`。卸载备份采用单份轮换，只保留最新的一份；如果服务器已经没有配置，则不会创建空备份，也不会删除已有的有效备份。非交互执行时可以增加 `--yes`。
 
-只卸载一个协议时，脚本先备份完整配置，再只删除对应的 `anytls-in`、`vless-in`、`hy2-in`、`snell5-in`、`snell6-in` 或 `direct-in`，其他入站会继续运行。选择 `all` 时不再依赖入站 tag，而是备份后直接删除全部 sing-box 配置目录和客户端文件。
+只卸载一个协议时，脚本先备份完整配置，再只删除对应的 `anytls-in`、`vless-in`、`hy2-in`、`snell5-in`、`snell6-in`、`ss2022-in` 或 `direct-in`，其他入站会继续运行。选择 `all` 时不再依赖入站 tag，而是备份后直接删除全部 sing-box 配置目录和客户端文件。
 
 使用 `--uninstall all --purge` 时还会清理其他脚本常用的 sing-box 安装位置，包括 `/usr/bin/sing-box`、`/usr/local/bin/sing-box`、`/opt/sing-box`、systemd/OpenRC 服务、配置目录、运行数据、日志、cron 和 logrotate 文件。备份目录 `/root/sbox-reality-backups/` 明确排除，始终保留。脚本不会执行危险的全盘模糊删除，避免误删名称中偶然包含 `sing-box` 的个人文件。
 
@@ -244,6 +254,24 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/
 生成的 Snell v5/v6 节点默认开启 TCP Fast Open 和连接复用：Surge 使用 `tfo=true,reuse=true`，sing-box 客户端使用 `tcp_fast_open: true`、`reuse: true`，服务端同时开启 TCP Fast Open。约定格式 URL 也携带 `tfo=true&reuse=true`；导入支持情况取决于客户端。
 
 所有客户端文件统一保存在 `/root/sing-box/`。sing-box 的 Snell v5 不包含官方 v5 QUIC Proxy，Surge 中的普通 TCP Snell 可以正常使用。
+
+---
+
+## Shadowsocks 2022
+
+脚本使用 sing-box 最新 Alpha 版本提供 Shadowsocks 2022 服务端，默认使用 `2022-blake3-aes-128-gcm`，监听端口 TCP/UDP 同用一个，默认选择未占用的随机高端口，并生成 sing-box 客户端配置、`ss://` 分享链接和 Surge 配置片段：
+
+```bash
+# 只安装 Shadowsocks 2022（默认 2022-blake3-aes-128-gcm）
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode ss2022
+
+# 指定加密方法与端口
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/sbox-reality/main/install.sh) --mode ss2022 --ss2022-method 2022-blake3-aes-256-gcm --ss2022-port 23456
+```
+
+可用参数：`--ss2022-port`、`--ss2022-method 2022-blake3-aes-128-gcm|2022-blake3-aes-256-gcm|2022-blake3-chacha20-poly1305`。密钥由脚本按方法要求的长度随机生成（128 位方法 16 字节，其余 32 字节），Base64 编码后写入配置与客户端文件；`2022-blake3-chacha20-poly1305` 不在 Surge 支持的方法列表里，选它时 Surge 配置片段会带提示，请用 sing-box 客户端配置或 `ss://` 链接导入。
+
+所有客户端文件统一保存在 `/root/sing-box/`：`ss2022-sing-box.json`、`ss2022-url.txt`、`ss2022-surge.conf`、`ss2022-info.txt`。
 
 ---
 
@@ -457,10 +485,10 @@ bash reality.sh --mode vless
 
 | 参数 | 说明 | 默认值 |
 | --- | --- | --- |
-| `-m`, `--mode` | 操作模式：`1`/`anytls`、`2`/`hy2`、`3`/`vless`、`4`/`snell5`、`5`/`snell6`、`6`/`full`、`7`/`uninstall`、`8`/`restore`、`9`/`direct`；协议可用逗号自由多选，如 `1,2,3` | 交互菜单 |
+| `-m`, `--mode` | 操作模式：`1`/`anytls`、`2`/`hy2`、`3`/`vless`、`4`/`snell5`、`5`/`snell6`、`6`/`full`、`7`/`uninstall`、`8`/`restore`、`9`/`direct`、`10`/`ss2022`；协议可用逗号自由多选，如 `1,2,3` | 交互菜单 |
 | `--restore` | 直接恢复最近一次有效备份 | 关闭 |
 | `--config` | 选择 `merge` 增量合并、`keep` 沿用当前配置、`restore` 恢复最近备份或 `new` 生成新配置 | `merge` |
-| `--uninstall` | 卸载范围：`anytls`、`vless`、`hy2`、`snell5`、`snell6`、`direct` 或 `all` | 卸载子菜单 |
+| `--uninstall` | 卸载范围：`anytls`、`vless`、`hy2`、`snell5`、`snell6`、`ss2022`、`direct` 或 `all` | 卸载子菜单 |
 | `--purge` | 卸载全部配置时同时删除 sing-box 软件包 | 关闭 |
 | `-y`, `--yes` | 跳过卸载确认，适合非交互执行 | 关闭 |
 | `--warp-rules` | MetaCubeX geosite 规则名，可一次指定多个，如 `youtube,netflix` | 关闭 |

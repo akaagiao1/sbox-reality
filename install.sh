@@ -40,6 +40,8 @@ SNELL5_PORT="${SNELL5_PORT:-auto}"
 SNELL6_PORT="${SNELL6_PORT:-auto}"
 SNELL5_OBFS_MODE="${SNELL5_OBFS_MODE:-none}"
 SNELL6_MODE="${SNELL6_MODE:-default}"
+SS2022_PORT="${SS2022_PORT:-auto}"
+SS2022_METHOD="${SS2022_METHOD:-2022-blake3-aes-128-gcm}"
 DIRECT_PORT="${DIRECT_PORT:-auto}"
 DIRECT_TARGET_ADDRESS="${DIRECT_TARGET_ADDRESS:-}"
 DIRECT_TARGET_PORT="${DIRECT_TARGET_PORT:-}"
@@ -78,11 +80,15 @@ SNELL5_SURGE_CONF="$OUTPUT_DIR/snell-v5-surge.conf"
 SNELL6_CLIENT_OUT="$OUTPUT_DIR/snell-v6-sing-box.json"
 SNELL6_URL_FILE="$OUTPUT_DIR/snell-v6-url.txt"
 SNELL6_SURGE_CONF="$OUTPUT_DIR/snell-v6-surge.conf"
+SS2022_CLIENT_OUT="$OUTPUT_DIR/ss2022-sing-box.json"
+SS2022_URL_FILE="$OUTPUT_DIR/ss2022-url.txt"
+SS2022_SURGE_CONF="$OUTPUT_DIR/ss2022-surge.conf"
 ANYTLS_INFO="$OUTPUT_DIR/anytls-info.txt"
 VLESS_INFO="$OUTPUT_DIR/vless-info.txt"
 HY2_INFO="$OUTPUT_DIR/hysteria2-info.txt"
 SNELL5_INFO="$OUTPUT_DIR/snell-v5-info.txt"
 SNELL6_INFO="$OUTPUT_DIR/snell-v6-info.txt"
+SS2022_INFO="$OUTPUT_DIR/ss2022-info.txt"
 DIRECT_INFO="$OUTPUT_DIR/direct-info.txt"
 SNELL_SURGE_CONF="$OUTPUT_DIR/snell-surge.conf"
 COMBINED_INFO="$OUTPUT_DIR/all-info.txt"
@@ -112,11 +118,15 @@ if [[ "${SBOX_REALITY_TEST_MODE:-0}" == "1" ]]; then
   SNELL6_CLIENT_OUT="$OUTPUT_DIR/snell-v6-sing-box.json"
   SNELL6_URL_FILE="$OUTPUT_DIR/snell-v6-url.txt"
   SNELL6_SURGE_CONF="$OUTPUT_DIR/snell-v6-surge.conf"
+  SS2022_CLIENT_OUT="$OUTPUT_DIR/ss2022-sing-box.json"
+  SS2022_URL_FILE="$OUTPUT_DIR/ss2022-url.txt"
+  SS2022_SURGE_CONF="$OUTPUT_DIR/ss2022-surge.conf"
   ANYTLS_INFO="$OUTPUT_DIR/anytls-info.txt"
   VLESS_INFO="$OUTPUT_DIR/vless-info.txt"
   HY2_INFO="$OUTPUT_DIR/hysteria2-info.txt"
   SNELL5_INFO="$OUTPUT_DIR/snell-v5-info.txt"
   SNELL6_INFO="$OUTPUT_DIR/snell-v6-info.txt"
+  SS2022_INFO="$OUTPUT_DIR/ss2022-info.txt"
   DIRECT_INFO="$OUTPUT_DIR/direct-info.txt"
   SNELL_SURGE_CONF="$OUTPUT_DIR/snell-surge.conf"
   COMBINED_INFO="$OUTPUT_DIR/all-info.txt"
@@ -136,12 +146,14 @@ INSTALL_VLESS=0
 INSTALL_HY2=0
 INSTALL_SNELL5=0
 INSTALL_SNELL6=0
+INSTALL_SS2022=0
 INSTALL_DIRECT=0
 ANYTLS_PORT_MODE=""
 VLESS_PORT_MODE=""
 HY2_PORT_MODE=""
 SNELL5_PORT_MODE=""
 SNELL6_PORT_MODE=""
+SS2022_PORT_MODE=""
 DIRECT_PORT_MODE=""
 FIRST_HOP_PORT=""
 NORMALIZED_HOP_PORTS=""
@@ -164,6 +176,9 @@ HY2_SHARE_URL=""
 SURGE_PROXY_LINE=""
 SNELL5_PSK=""
 SNELL6_PSK=""
+SS2022_PASSWORD=""
+SS2022_SHARE_URL=""
+SS2022_SURGE_LINE=""
 SNELL5_SURGE_LINE=""
 SNELL6_SURGE_LINE=""
 SNELL5_SHARE_URL=""
@@ -433,7 +448,7 @@ usage() {
   bash $0 anytls hy2 vless
   bash $0 --mode full
   bash $0 --restore
-  bash $0 --uninstall anytls|vless|hy2|snell5|snell6|direct|all
+  bash $0 --uninstall anytls|vless|hy2|snell5|snell6|ss2022|direct|all
 
 安装模式：
   1, anytls     安装 AnyTLS + REALITY
@@ -445,6 +460,7 @@ usage() {
   7, uninstall  彻底卸载全部配置和 sing-box
   8, restore    恢复最新的配置备份
   9, direct     安装 Direct 固定目标中转
+  10, ss2022    安装 Shadowsocks 2022（2022-blake3 加密）
 
 可自由多选协议，例如：--mode 1,2 或 --mode 1,2,3。
 也支持中文逗号、空格分隔和协议名混用，例如：--mode anytls,hy2,vless。
@@ -456,7 +472,7 @@ usage() {
       --config new     生成全新配置，不合并已有入站
 
 卸载选项：
-      --uninstall      卸载范围：anytls、vless、hy2、snell5、snell6、direct 或 all
+      --uninstall      卸载范围：anytls、vless、hy2、snell5、snell6、ss2022、direct 或 all
       --purge          同时移除 sing-box 软件包（仅适用于 --uninstall all）
   -y, --yes            跳过卸载确认
 
@@ -491,6 +507,10 @@ Snell 选项：
       --snell5-obfs   v5 HTTP 混淆：none 或 http，默认：none
       --snell6-mode   v6 流量模式：default、unshaped 或 unsafe-raw，默认：default
 
+Shadowsocks 2022 选项：
+      --ss2022-port   Shadowsocks 2022 TCP/UDP 监听端口，默认：自动选择
+      --ss2022-method 加密方法：2022-blake3-aes-128-gcm、2022-blake3-aes-256-gcm 或 2022-blake3-chacha20-poly1305，默认：2022-blake3-aes-128-gcm
+
 Direct 固定目标中转选项：
       --direct-port        TCP/UDP 监听端口，默认：自动选择
       --direct-address     中转目标地址，必须指定
@@ -502,7 +522,7 @@ WARP 分流选项：
       --warp-reset    重新注册 WARP 凭据；未指定规则时沿用现有列表
 
 通用选项：
-  -m, --mode          模式：1-9、anytls、vless、hy2、snell5、snell6、direct、full、uninstall、restore；协议可逗号多选
+  -m, --mode          模式：1-10、anytls、vless、hy2、snell5、snell6、ss2022、direct、full、uninstall、restore；协议可逗号多选
   -p, --port          当前单协议模式的端口；同时安装时请分别使用各协议端口选项
       --server-host   写入客户端配置的公网 IP 或域名；无法自动检测时必填
   -h, --help          显示帮助
@@ -511,7 +531,7 @@ WARP 分流选项：
   INSTALL_MODE, CONFIG_POLICY, UNINSTALL_SCOPE, PORT,
   SERVER_HOST,
   REALITY_DOMAIN, DOMAIN, ANYTLS_PORT,
-  VLESS_DOMAIN, VLESS_PORT, SNELL5_PORT, SNELL6_PORT,
+  VLESS_DOMAIN, VLESS_PORT, SNELL5_PORT, SNELL6_PORT, SS2022_PORT, SS2022_METHOD,
   DIRECT_PORT, DIRECT_TARGET_ADDRESS, DIRECT_TARGET_PORT,
   SNELL5_OBFS_MODE, SNELL6_MODE,
   HIGH_PORT_MIN, HIGH_PORT_MAX,
@@ -1442,6 +1462,7 @@ while [[ $# -gt 0 ]]; do
     -m|--mode|--install|--config|\
     -d|--domain|--reality-domain|--anytls-port|--vless-domain|--vless-port|\
     --snell5-port|--snell6-port|--snell5-obfs|--snell6-mode|\
+    --ss2022-port|--ss2022-method|\
     --direct-port|--direct-address|--direct-target-port|--server-host|\
     -s|--sni|--hy2-sni|--hy2-port|-P|--ports|--port-hopping|\
     -i|--interval|--up|--down|--obfs-type|--obfs-password|\
@@ -1476,6 +1497,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     5|snell6|snell-v6)
       append_install_mode "5"
+      shift
+      ;;
+    10|ss2022|ss|shadowsocks|shadowsocks-2022)
+      append_install_mode "10"
       shift
       ;;
     9|direct|direct-udp|udp-forward)
@@ -1561,6 +1586,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --snell6-mode)
       SNELL6_MODE="${2:-}"
+      shift 2
+      ;;
+    --ss2022-port)
+      SS2022_PORT="${2:-}"
+      shift 2
+      ;;
+    --ss2022-method)
+      SS2022_METHOD="${2:-}"
       shift 2
       ;;
     --direct-port)
@@ -1716,9 +1749,10 @@ choose_mode() {
     echo "  7) 彻底卸载全部配置和 sing-box（保留备份）"
     echo "  8) 恢复最新备份"
     echo "  9) 安装 Direct 固定目标中转"
+    echo "  10) 安装 Shadowsocks 2022（2022-blake3 加密）"
     echo
     echo "提示：可多选协议，例如 1,2 或 1,2,3"
-    read -rp "请输入选项 [1-9]：" INSTALL_MODE
+    read -rp "请输入选项 [1-10]：" INSTALL_MODE
   else
     echo "错误：非交互模式下必须指定安装模式"
     echo "示例：bash $0 --mode 1,2,3"
@@ -1762,6 +1796,10 @@ normalize_mode() {
         ;;
       5|snell6|snell-v6)
         INSTALL_SNELL6=1
+        has_install=1
+        ;;
+      10|ss2022|ss|shadowsocks|shadowsocks-2022)
+        INSTALL_SS2022=1
         has_install=1
         ;;
       9|direct|direct-udp|udp-forward)
@@ -1834,11 +1872,11 @@ choose_protocol_port() {
       while true; do
         read -rp "请输入 $label 端口 [1-65535]：" custom_port
         if validate_port "$custom_port"; then
-          if [[ "$transport" == "udp" ]] && is_udp_port_in_use_by_other "$custom_port"; then
+          if [[ "$transport" == "udp" || "$transport" == "both" ]] && is_udp_port_in_use_by_other "$custom_port"; then
             echo "端口 $custom_port/UDP 已被占用，请使用其他端口"
             continue
           fi
-          if [[ "$transport" == "tcp" ]] && is_tcp_port_in_use_by_other "$custom_port"; then
+          if [[ "$transport" == "tcp" || "$transport" == "both" ]] && is_tcp_port_in_use_by_other "$custom_port"; then
             echo "端口 $custom_port/TCP 已被占用，请使用其他端口"
             continue
           fi
@@ -1918,6 +1956,7 @@ choose_install_ports() {
   (( INSTALL_VLESS )) && choose_protocol_port "VLESS" "VLESS_PORT" "tcp"
   (( INSTALL_SNELL5 )) && choose_protocol_port "Snell v5" "SNELL5_PORT" "tcp"
   (( INSTALL_SNELL6 )) && choose_protocol_port "Snell v6" "SNELL6_PORT" "tcp"
+  (( INSTALL_SS2022 )) && choose_protocol_port "Shadowsocks 2022" "SS2022_PORT" "both"
   (( INSTALL_DIRECT )) && choose_protocol_port "Direct 固定目标中转" "DIRECT_PORT" "udp"
 
   if (( INSTALL_DIRECT )) && [[ -t 0 ]]; then
@@ -1950,9 +1989,10 @@ choose_uninstall_scope() {
       echo "  4) 仅 Snell v5"
       echo "  5) 仅 Snell v6"
       echo "  6) 仅 Direct 固定目标中转"
-      echo "  7) 全部卸载"
+      echo "  7) 仅 Shadowsocks 2022"
+      echo "  8) 全部卸载"
       echo
-      read -rp "请输入选项 [1-7]：" UNINSTALL_SCOPE
+      read -rp "请输入选项 [1-8]：" UNINSTALL_SCOPE
     else
       echo "错误：非交互模式下必须指定卸载范围"
       echo "示例：bash $0 --uninstall all --yes"
@@ -1979,7 +2019,10 @@ choose_uninstall_scope() {
     6|direct|direct-udp|udp-forward)
       UNINSTALL_SCOPE="direct"
       ;;
-    7|full|all)
+    7|ss2022|ss|shadowsocks|shadowsocks-2022)
+      UNINSTALL_SCOPE="ss2022"
+      ;;
+    8|full|all)
       UNINSTALL_SCOPE="all"
       ;;
     *)
@@ -2013,6 +2056,9 @@ apply_shared_port() {
   fi
   if (( INSTALL_SNELL6 )); then
     SNELL6_PORT="$SHARED_PORT"
+  fi
+  if (( INSTALL_SS2022 )); then
+    SS2022_PORT="$SHARED_PORT"
   fi
   if (( INSTALL_DIRECT )); then
     DIRECT_PORT="$SHARED_PORT"
@@ -2445,6 +2491,16 @@ build_snell_share_urls() {
   fi
 }
 
+base64url_nopad() {
+  printf '%s' "$1" | openssl base64 -A | tr '+/' '-_' | tr -d '='
+}
+
+build_ss2022_share_url() {
+  local userinfo
+  userinfo="$(base64url_nopad "${SS2022_METHOD}:${SS2022_PASSWORD}")"
+  SS2022_SHARE_URL="ss://${userinfo}@${SERVER_URL_HOST}:${SS2022_PORT}#SS2022"
+}
+
 prepare_certificate() {
   local san_type
 
@@ -2793,6 +2849,10 @@ backup_existing_files() {
     "$SNELL6_CLIENT_OUT"
     "$SNELL6_URL_FILE"
     "$SNELL6_SURGE_CONF"
+    "$SS2022_CLIENT_OUT"
+    "$SS2022_URL_FILE"
+    "$SS2022_SURGE_CONF"
+    "$SS2022_INFO"
     "$DIRECT_INFO"
     "$COMBINED_INFO"
     "$PORT_ENV"
@@ -3013,6 +3073,10 @@ restore_latest_backup() {
     "$SNELL6_CLIENT_OUT"
     "$SNELL6_URL_FILE"
     "$SNELL6_SURGE_CONF"
+    "$SS2022_CLIENT_OUT"
+    "$SS2022_URL_FILE"
+    "$SS2022_SURGE_CONF"
+    "$SS2022_INFO"
     "$DIRECT_INFO"
     "$COMBINED_INFO"
     "$PORT_ENV"
@@ -3186,12 +3250,17 @@ remove_direct_files() {
   rm -f "$DIRECT_INFO"
 }
 
+remove_ss2022_files() {
+  rm -f "$SS2022_CLIENT_OUT" "$SS2022_URL_FILE" "$SS2022_SURGE_CONF" "$SS2022_INFO"
+}
+
 uninstall_selected() {
   local remove_anytls=false
   local remove_vless=false
   local remove_hy2=false
   local remove_snell5=false
   local remove_snell6=false
+  local remove_ss2022=false
   local remove_direct=false
   local matched=0
   local remaining=0
@@ -3214,6 +3283,9 @@ uninstall_selected() {
     snell6)
       remove_snell6=true
       ;;
+    ss2022)
+      remove_ss2022=true
+      ;;
     direct)
       remove_direct=true
       ;;
@@ -3223,6 +3295,7 @@ uninstall_selected() {
       remove_hy2=true
       remove_snell5=true
       remove_snell6=true
+      remove_ss2022=true
       remove_direct=true
       ;;
   esac
@@ -3251,7 +3324,7 @@ uninstall_selected() {
       echo "错误：$SERVER_CONF 不是有效的 JSON，服务端配置未作更改"
       exit 1
     else
-      matched="$(jq --argjson remove_anytls "$remove_anytls" --argjson remove_vless "$remove_vless" --argjson remove_hy2 "$remove_hy2" --argjson remove_snell5 "$remove_snell5" --argjson remove_snell6 "$remove_snell6" --argjson remove_direct "$remove_direct" '
+      matched="$(jq --argjson remove_anytls "$remove_anytls" --argjson remove_vless "$remove_vless" --argjson remove_hy2 "$remove_hy2" --argjson remove_snell5 "$remove_snell5" --argjson remove_snell6 "$remove_snell6" --argjson remove_ss2022 "$remove_ss2022" --argjson remove_direct "$remove_direct" '
         [(.inbounds // [])[]
           | select(
               (($remove_anytls == true) and (.tag == "anytls-in"))
@@ -3259,6 +3332,7 @@ uninstall_selected() {
               or (($remove_hy2 == true) and (.tag == "hy2-in"))
               or (($remove_snell5 == true) and (.tag == "snell5-in"))
               or (($remove_snell6 == true) and (.tag == "snell6-in"))
+              or (($remove_ss2022 == true) and (.tag == "ss2022-in"))
               or (($remove_direct == true) and (.tag == "direct-in"))
             )
         ] | length
@@ -3266,7 +3340,7 @@ uninstall_selected() {
 
       if (( matched > 0 )); then
         temp_config="$(mktemp)"
-        jq --argjson remove_anytls "$remove_anytls" --argjson remove_vless "$remove_vless" --argjson remove_hy2 "$remove_hy2" --argjson remove_snell5 "$remove_snell5" --argjson remove_snell6 "$remove_snell6" --argjson remove_direct "$remove_direct" '
+        jq --argjson remove_anytls "$remove_anytls" --argjson remove_vless "$remove_vless" --argjson remove_hy2 "$remove_hy2" --argjson remove_snell5 "$remove_snell5" --argjson remove_snell6 "$remove_snell6" --argjson remove_ss2022 "$remove_ss2022" --argjson remove_direct "$remove_direct" '
           .inbounds = [
             (.inbounds // [])[]
             | select(
@@ -3275,6 +3349,7 @@ uninstall_selected() {
                 and (($remove_hy2 == false) or (.tag != "hy2-in"))
                 and (($remove_snell5 == false) or (.tag != "snell5-in"))
                 and (($remove_snell6 == false) or (.tag != "snell6-in"))
+                and (($remove_ss2022 == false) or (.tag != "ss2022-in"))
                 and (($remove_direct == false) or (.tag != "direct-in"))
               )
           ]
@@ -3313,6 +3388,9 @@ uninstall_selected() {
   if [[ "$remove_snell6" == true ]]; then
     remove_snell_files 6
   fi
+  if [[ "$remove_ss2022" == true ]]; then
+    remove_ss2022_files
+  fi
   if [[ "$remove_direct" == true ]]; then
     remove_direct_files
   fi
@@ -3350,6 +3428,7 @@ is_selected_inbound_tag() {
     hy2-in) (( INSTALL_HY2 )) ;;
     snell5-in) (( INSTALL_SNELL5 )) ;;
     snell6-in) (( INSTALL_SNELL6 )) ;;
+    ss2022-in) (( INSTALL_SS2022 )) ;;
     direct-in) (( INSTALL_DIRECT )) ;;
     *) return 1 ;;
   esac
@@ -3487,6 +3566,7 @@ validate_planned_ports_against_existing_config() {
   (( INSTALL_VLESS )) && validate_planned_port_against_existing_config tcp "$VLESS_PORT" "VLESS"
   (( INSTALL_SNELL5 )) && validate_planned_port_against_existing_config tcp "$SNELL5_PORT" "Snell v5"
   (( INSTALL_SNELL6 )) && validate_planned_port_against_existing_config tcp "$SNELL6_PORT" "Snell v6"
+  (( INSTALL_SS2022 )) && validate_planned_port_against_existing_config both "$SS2022_PORT" "Shadowsocks 2022"
   (( INSTALL_HY2 )) && validate_planned_port_against_existing_config udp "$HY2_PORT" "Hysteria2"
   (( INSTALL_DIRECT )) && validate_planned_port_against_existing_config both "$DIRECT_PORT" "Direct"
   if (( INSTALL_HY2 )) && [[ "$HY2_PORT_HOPPING" == "on" ]]; then
@@ -3741,6 +3821,55 @@ prepare_inputs() {
     if is_udp_port_in_use_by_other "$DIRECT_PORT"; then
       echo "错误：UDP 端口 $DIRECT_PORT 已被其他进程占用"
       ss -H -lunp 2>/dev/null | awk -v p="$DIRECT_PORT" '$4 ~ ":" p "$" {print}' || true
+      exit 1
+    fi
+  fi
+
+  if (( INSTALL_SS2022 )); then
+    case "$SS2022_METHOD" in
+      2022-blake3-aes-128-gcm|2022-blake3-aes-256-gcm|2022-blake3-chacha20-poly1305)
+        ;;
+      *)
+        echo "错误：Shadowsocks 2022 加密方法只能是 2022-blake3-aes-128-gcm、2022-blake3-aes-256-gcm 或 2022-blake3-chacha20-poly1305：$SS2022_METHOD"
+        exit 1
+        ;;
+    esac
+
+    if [[ -z "$SS2022_PORT" || "$SS2022_PORT" == "auto" || "$SS2022_PORT" == "random" ]]; then
+      SS2022_PORT="$(pick_random_free_high_direct_port)"
+      while { (( INSTALL_HY2 )) && port_in_hop_specs "$SS2022_PORT" "$NORMALIZED_HOP_PORTS"; } \
+        || { (( INSTALL_ANYTLS )) && [[ "$SS2022_PORT" == "$ANYTLS_PORT" ]]; } \
+        || { (( INSTALL_VLESS )) && [[ "$SS2022_PORT" == "$VLESS_PORT" ]]; } \
+        || { (( INSTALL_SNELL5 )) && [[ "$SS2022_PORT" == "$SNELL5_PORT" ]]; } \
+        || { (( INSTALL_SNELL6 )) && [[ "$SS2022_PORT" == "$SNELL6_PORT" ]]; } \
+        || { (( INSTALL_DIRECT )) && [[ "$SS2022_PORT" == "$DIRECT_PORT" ]]; }; do
+        SS2022_PORT="$(pick_random_free_high_direct_port)"
+      done
+      SS2022_PORT_MODE="自动随机"
+    elif validate_port "$SS2022_PORT"; then
+      SS2022_PORT_MODE="手动指定"
+    else
+      echo "错误：无效的 Shadowsocks 2022 端口：$SS2022_PORT"
+      exit 1
+    fi
+
+    if { (( INSTALL_HY2 )) && port_in_hop_specs "$SS2022_PORT" "$NORMALIZED_HOP_PORTS"; } \
+      || { (( INSTALL_ANYTLS )) && [[ "$SS2022_PORT" == "$ANYTLS_PORT" ]]; } \
+      || { (( INSTALL_VLESS )) && [[ "$SS2022_PORT" == "$VLESS_PORT" ]]; } \
+      || { (( INSTALL_SNELL5 )) && [[ "$SS2022_PORT" == "$SNELL5_PORT" ]]; } \
+      || { (( INSTALL_SNELL6 )) && [[ "$SS2022_PORT" == "$SNELL6_PORT" ]]; } \
+      || { (( INSTALL_DIRECT )) && [[ "$SS2022_PORT" == "$DIRECT_PORT" ]]; }; then
+      echo "错误：Shadowsocks 2022 端口与本次安装的其他入站端口重复：$SS2022_PORT"
+      exit 1
+    fi
+    if is_tcp_port_in_use_by_other "$SS2022_PORT"; then
+      echo "错误：TCP 端口 $SS2022_PORT 已被其他进程占用"
+      ss -H -lntp 2>/dev/null | awk -v p="$SS2022_PORT" '$4 ~ ":" p "$" {print}' || true
+      exit 1
+    fi
+    if is_udp_port_in_use_by_other "$SS2022_PORT"; then
+      echo "错误：UDP 端口 $SS2022_PORT 已被其他进程占用"
+      ss -H -lunp 2>/dev/null | awk -v p="$SS2022_PORT" '$4 ~ ":" p "$" {print}' || true
       exit 1
     fi
   fi
@@ -4103,6 +4232,20 @@ generate_snell_secrets() {
   fi
 }
 
+generate_ss2022_secrets() {
+  local key_length=32
+
+  if [[ "$SS2022_METHOD" == "2022-blake3-aes-128-gcm" ]]; then
+    key_length=16
+  fi
+  SS2022_PASSWORD="$(openssl rand -base64 "$key_length" | tr -d '\n')"
+
+  if [[ -z "$SS2022_PASSWORD" ]]; then
+    echo "错误：生成 Shadowsocks 2022 密钥失败"
+    exit 1
+  fi
+}
+
 anytls_inbound_json() {
   cat << JSON
     {
@@ -4215,6 +4358,19 @@ snell6_inbound_json() {
 JSON
 }
 
+ss2022_inbound_json() {
+  cat << JSON
+    {
+      "type": "shadowsocks",
+      "tag": "ss2022-in",
+      "listen": "::",
+      "listen_port": ${SS2022_PORT},
+      "method": "${SS2022_METHOD}",
+      "password": "${SS2022_PASSWORD}"
+    }
+JSON
+}
+
 direct_inbound_json() {
   cat << JSON
     {
@@ -4257,6 +4413,12 @@ $(snell5_inbound_json)"
   if (( INSTALL_SNELL6 )); then
     inbounds="${inbounds}${sep}
 $(snell6_inbound_json)"
+    sep=","
+  fi
+
+  if (( INSTALL_SS2022 )); then
+    inbounds="${inbounds}${sep}
+$(ss2022_inbound_json)"
     sep=","
   fi
 
@@ -4501,6 +4663,9 @@ run_install_after_config_steps() {
   if (( INSTALL_SNELL5 || INSTALL_SNELL6 )); then
     write_snell_clients || return 1
   fi
+  if (( INSTALL_SS2022 )); then
+    write_ss2022_client || return 1
+  fi
   if (( INSTALL_ANYTLS )) && ! run_sing_box check -c "$ANYTLS_CLIENT_OUT"; then
     return 1
   fi
@@ -4514,6 +4679,9 @@ run_install_after_config_steps() {
     return 1
   fi
   if (( INSTALL_SNELL6 )) && ! run_sing_box check -c "$SNELL6_CLIENT_OUT"; then
+    return 1
+  fi
+  if (( INSTALL_SS2022 )) && ! run_sing_box check -c "$SS2022_CLIENT_OUT"; then
     return 1
   fi
 
@@ -4731,6 +4899,44 @@ SURGE
   fi
 }
 
+write_ss2022_client() {
+  build_ss2022_share_url
+  SS2022_SURGE_LINE="SS2022=ss,${SERVER_URL_HOST},${SS2022_PORT},encrypt-method=${SS2022_METHOD},password=${SS2022_PASSWORD},udp-relay=true"
+
+  cat > "$SS2022_CLIENT_OUT" << JSON
+{
+  "outbounds": [
+    {
+      "type": "shadowsocks",
+      "server": "${SERVER_IP}",
+      "server_port": ${SS2022_PORT},
+      "method": "${SS2022_METHOD}",
+      "password": "${SS2022_PASSWORD}"
+    }
+  ]
+}
+JSON
+
+  printf '%s\n' "$SS2022_SHARE_URL" > "$SS2022_URL_FILE"
+
+  if [[ "$SS2022_METHOD" == "2022-blake3-chacha20-poly1305" ]]; then
+    cat > "$SS2022_SURGE_CONF" << SURGE
+# Surge 不支持 2022-blake3-chacha20-poly1305，以下代理行仅供支持该方法的客户端参考。
+# 请使用同目录的 ss2022-sing-box.json 或 ss2022-url.txt。
+[Proxy]
+$SS2022_SURGE_LINE
+SURGE
+  else
+    cat > "$SS2022_SURGE_CONF" << SURGE
+[Proxy]
+$SS2022_SURGE_LINE
+
+[Proxy Group]
+Proxy=select,SS2022,DIRECT
+SURGE
+  fi
+}
+
 write_info_files() {
   local port_service_config
   local warp_rules_json="[]"
@@ -4739,6 +4945,7 @@ write_info_files() {
   local has_hy2=0
   local has_snell5=0
   local has_snell6=0
+  local has_ss2022=0
   local has_direct=0
 
   if [[ "$SERVICE_MANAGER" == "systemd" ]]; then
@@ -4758,6 +4965,7 @@ write_info_files() {
   fi
   jq -e '.inbounds[]? | select(.tag == "snell5-in")' "$SERVER_CONF" >/dev/null 2>&1 && has_snell5=1
   jq -e '.inbounds[]? | select(.tag == "snell6-in")' "$SERVER_CONF" >/dev/null 2>&1 && has_snell6=1
+  jq -e '.inbounds[]? | select(.tag == "ss2022-in")' "$SERVER_CONF" >/dev/null 2>&1 && has_ss2022=1
   jq -e '.inbounds[]? | select(.tag == "direct-in")' "$SERVER_CONF" >/dev/null 2>&1 && has_direct=1
   warp_rules_json="$(warp_current_rules "$SERVER_CONF" 2>/dev/null || printf '[]')"
 
@@ -4771,6 +4979,7 @@ sbox-reality 统一安装完成
   已安装 Hysteria2 + Surge：$has_hy2
   已安装 Snell v5：$has_snell5
   已安装 Snell v6：$has_snell6
+  已安装 Shadowsocks 2022：$has_ss2022
   已安装 Direct 固定目标中转：$has_direct
   WARP 分流规则：$(jq -r 'if length == 0 then "未启用" else join(",") end' <<< "$warp_rules_json")
 TXT
@@ -4980,6 +5189,40 @@ TXT
     printf '\n' >> "$COMBINED_INFO"
   fi
 
+  if (( INSTALL_SS2022 )); then
+    cat > "$SS2022_INFO" << TXT
+Shadowsocks 2022 安装完成
+
+服务端：
+  配置文件：$SERVER_CONF
+  TCP/UDP 监听端口：$SS2022_PORT
+  端口模式：$SS2022_PORT_MODE
+  加密方法：$SS2022_METHOD
+
+Surge 代理配置：
+$SS2022_SURGE_LINE
+
+客户端文件：
+  sing-box：$SS2022_CLIENT_OUT
+  URL：$SS2022_URL_FILE
+  Surge：$SS2022_SURGE_CONF
+
+客户端链接：
+$SS2022_SHARE_URL
+
+客户端参数：
+  服务器：$SERVER_IP
+  服务器端口：$SS2022_PORT
+  加密方法：$SS2022_METHOD
+  密码：$SS2022_PASSWORD
+TXT
+    cat "$SS2022_INFO" >> "$COMBINED_INFO"
+    printf '\n' >> "$COMBINED_INFO"
+  elif [[ -f "$SS2022_INFO" ]]; then
+    cat "$SS2022_INFO" >> "$COMBINED_INFO"
+    printf '\n' >> "$COMBINED_INFO"
+  fi
+
   if (( INSTALL_DIRECT )); then
     cat > "$DIRECT_INFO" << TXT
 Direct 固定目标中转安装完成
@@ -5065,6 +5308,18 @@ print_summary() {
     echo "Snell Surge 配置片段："
     cat "$SNELL_SURGE_CONF"
   fi
+
+  if (( INSTALL_SS2022 )); then
+    echo
+    echo "Shadowsocks 2022 分享链接："
+    cat "$SS2022_URL_FILE"
+    echo
+    echo "Shadowsocks 2022 Surge 配置片段："
+    cat "$SS2022_SURGE_CONF"
+    echo
+    echo "Shadowsocks 2022 sing-box 客户端出站配置："
+    cat "$SS2022_CLIENT_OUT"
+  fi
 }
 
 main() {
@@ -5136,6 +5391,7 @@ main() {
   echo "  安装 Hysteria2 + Surge：$INSTALL_HY2"
   echo "  安装 Snell v5：$INSTALL_SNELL5"
   echo "  安装 Snell v6：$INSTALL_SNELL6"
+  echo "  安装 Shadowsocks 2022：$INSTALL_SS2022"
   echo "  安装 Direct 固定目标中转：$INSTALL_DIRECT"
   if (( INSTALL_ANYTLS )); then
     echo "  AnyTLS 域名：$REALITY_DOMAIN"
@@ -5162,6 +5418,10 @@ main() {
   if (( INSTALL_SNELL6 )); then
     echo "  Snell v6 端口：$SNELL6_PORT ($SNELL6_PORT_MODE)"
     echo "  Snell v6 模式：$SNELL6_MODE"
+  fi
+  if (( INSTALL_SS2022 )); then
+    echo "  Shadowsocks 2022 端口：$SS2022_PORT ($SS2022_PORT_MODE)"
+    echo "  Shadowsocks 2022 加密方法：$SS2022_METHOD"
   fi
   if (( INSTALL_DIRECT )); then
     echo "  Direct 监听端口：$DIRECT_PORT ($DIRECT_PORT_MODE)"
@@ -5193,6 +5453,10 @@ main() {
   fi
 
   generate_snell_secrets
+
+  if (( INSTALL_SS2022 )); then
+    generate_ss2022_secrets
+  fi
 
   if (( INSTALL_HY2 )); then
     prepare_certificate

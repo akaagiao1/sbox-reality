@@ -56,7 +56,7 @@ for item in "${mode_items[@]}"; do
   case "$item" in
     anytls|1) normalized_modes="${normalized_modes:+$normalized_modes,}anytls" ;;
     vless|3) normalized_modes="${normalized_modes:+$normalized_modes,}vless" ;;
-    *) error "扫描只给 Reality 协议挑域名, --mode 里不能有 $item (hy2 / snell 请直接用 install.sh 装)" ;;
+    *) error "扫描只给 Reality 协议挑域名, --mode 里不能有 $item (hy2 / snell / ss2022 请直接用 install.sh 装)" ;;
   esac
 done
 [[ -n "$normalized_modes" ]] || error '--mode 不能为空'
